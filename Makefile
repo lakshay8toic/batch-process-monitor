@@ -1,6 +1,6 @@
 # Makefile for the Batch Process Monitor (FCFS dispatcher)
 #
-#   make            build build/batch_monitor and build/test_worker
+#   make            build build/batch_monitor, build/sleepy and build/test_worker
 #   make run        run the specification's example job list
 #   make test       run the automated test suite (~75 s; QUICK=1 for ~35 s)
 #   make memcheck   run under valgrind to check for leaks (optional)
@@ -14,10 +14,11 @@ BUILD   = build
 
 MONITOR = $(BUILD)/batch_monitor
 WORKER  = $(BUILD)/test_worker
+SLEEPY  = $(BUILD)/sleepy
 
 .PHONY: all run test memcheck clean
 
-all: $(MONITOR) $(WORKER)
+all: $(MONITOR) $(SLEEPY) $(WORKER)
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -25,12 +26,15 @@ $(BUILD):
 $(MONITOR): src/batch_monitor.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ src/batch_monitor.c
 
+$(SLEEPY): src/sleepy.c | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ src/sleepy.c
+
 $(WORKER): tests/test_worker.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ tests/test_worker.c
 
-# Demo: the example job list from the project specification.
+# Demo: the process list exactly as given in the project sheet.
 run: all
-	./$(MONITOR) tests/jobs_basic.txt
+	./$(MONITOR) tests/jobs_sheet_processlist.txt
 
 # Automated test suite (real 1-second ticks, real child processes).
 test: all

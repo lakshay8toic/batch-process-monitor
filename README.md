@@ -20,12 +20,37 @@ A Linux **batch process monitor** that reads a list of jobs from a *dispatch fil
 | Member | Contribution | Main code / files |
 |---|---|---|
 | **Lakshay** (Team Leader) | Planned the project and the overall architecture, split the work, and built the dispatcher core: the FCFS main loop, launching jobs with `fork()` + `execvp()`, the budget countdown with SIGINT → SIGKILL termination, and safe Ctrl+C handling. Integrated everyone's parts, reviewed the code and set up the GitHub repository. | `run_dispatcher()`, `dispatch_next()`, `wait_for_tick()`, `launch_job()`, `terminate_current()`, `shut_down()`, signal handlers |
-| **Md Ahab Firoz** | Built the dispatch-file parser: support for both input formats, splitting commands into arguments (including quotes), validating every field, and line-numbered error messages, plus the check that arrival times never decrease. | `load_dispatch_file()`, `parse_line()`, `tokenize_command()`, `parse_int()`, `trim()` |
+| **Md Ahab Firoz** | Built the dispatch-file parser: support for both input formats (including the sheet's commandless process list, which runs the default `sleepy`), splitting commands into arguments (including quotes), validating every field, and line-numbered error messages, plus the check that arrival times never decrease. | `load_dispatch_file()`, `parse_line()`, `tokenize_command()`, `parse_int()`, `trim()` |
 | **Akshita Modi** | Designed the Process Control Block and the linked-list ready queue, and wrote the process-reaping and status code (`waitpid()`, exit status vs. signal) along with the final summary table and the waiting/turnaround-time metrics. | `struct pcb`, `enqueue()`, `dequeue()`, `poll_current()`, `finish_current()`, `retire_job()`, `print_summary()` |
-| **N. Shanmuka Abhiram** | Owned testing and the build: wrote the `test_worker` helper program, all the test dispatch files and the automated test suite, wrote the Makefile, and ran the valgrind memory checks. | `tests/test_worker.c`, `tests/run_tests.sh`, `tests/jobs_*.txt`, `Makefile` |
+| **N. Shanmuka Abhiram** | Owned testing and the build: wrote the `sleepy` program from the sheet, the `test_worker` helper program, all the test dispatch files and the automated test suite, wrote the Makefile, and ran the valgrind memory checks. | `src/sleepy.c`, `tests/test_worker.c`, `tests/run_tests.sh`, `tests/jobs_*.txt`, `Makefile` |
 | **Everyone** | Wrote the documentation (this README and the viva guide) and tested on Linux before submission. | `README.md`, `docs/VIVA_GUIDE.md` |
 
 ---
+
+## 0. Project-sheet compliance
+
+Every requirement on the project sheet, and where it is implemented:
+
+| Project-sheet requirement | Status | Where / how |
+|---|---|---|
+| Accept a list of programs from a file and run them FCFS | Done | `load_dispatch_file()` + `dispatch_next()` |
+| Arrival time per program: a job cannot start before its arrival time | Done | `dispatch_next()` only starts the head when `arrivaltime <= clock` |
+| Command list format `0,sleepy 3` … | Done | `tests/jobs_sheet_sleepy.txt`, the sheet's list exactly as given |
+| The `sleepy` program used in the examples | Done | `src/sleepy.c` → `build/sleepy` (`sleepy N` sleeps N s; `sleepy` with no argument runs until stopped) |
+| Process-list format `<arrival>,<priority>,<cputime>,<memory>,<res1>…<res4>`, e.g. `0, 0, 3, 64, 0, 0, 0, 0` (spaces after commas) | Done | `tests/jobs_sheet_processlist.txt`, exactly as given. Lines with no command run the default program `sleepy` until their CPU time runs out (`make run`) |
+| Queue of job structures; dequeue only when the time has come and nothing is running | Done | `Queue` (linked list), `dequeue()`, `Dispatcher.current` |
+| Jobs are in chronological order of arrival (guaranteed) | Done, and checked | out-of-order files are rejected with the line number |
+| `struct pcb` with `pid`, `args[MAXARGS]`, `arrivaltime`, `remainingcputime`, `next`; `typedef Pcb`, `PcbPtr` | Done | `struct pcb` (same fields and names, plus lifecycle fields) |
+| Algorithm: initialise queue → fill from file → start timer | Done | `main()` → `load_dispatch_file()` → `run_dispatcher()` |
+| While queue non-empty or a process is running | Done | `while (d->queue.head \|\| d->current)` |
+| If running: decrement `remainingcputime`; if time's up, send **SIGINT** and free the structure | Done | `run_dispatcher()` → `terminate_current(d, SIGINT)` → `retire_job()` frees the PCB |
+| If nothing running, queue not empty, head arrived: dequeue, **fork & exec**, set as current | Done | `dispatch_next()` → `launch_job()` (`fork()` + `execvp()`) |
+| Sleep one second, increment timer, repeat; the tests come *before* the sleep (sheet's order) | Done | `wait_for_tick()`, then `d->clock++`. Same order as the sheet |
+| Exit when everything has finished | Done | the loop ends, the summary is printed, exit 0 |
+| Priority used for scheduling | Not used, on purpose | The sheet says priority matters in *later* dispatchers. FCFS ignores it; it is stored and shown as metadata |
+| Round-Robin dispatcher ("more about this soon") | **Not yet** | Waiting for the details. Design in §18 and viva Q22 |
+
+Running the sheet's process list produces the textbook FCFS schedule: jobs finish at 3, 9, 13, 18 and 20, average waiting time 4.60, average turnaround 8.60. This is checked automatically by `make test`.
 
 ## 1. Academic objective
 
@@ -38,7 +63,7 @@ The project shows how an operating system's **dispatcher** manages processes:
 - stopping it when its time is up, and
 - cleaning up after it, with no zombies or orphans.
 
-This version implements the first dispatcher from the specification, **FCFS**. Round-Robin is listed under future enhancements.
+This version implements the **FCFS dispatcher** from the project sheet, exactly as specified (see §0, *Project-sheet compliance*). The sheet says a Round-Robin dispatcher comes next, "more about this soon"; it is not implemented yet, and §18 describes how it will be added.
 
 ## 2. Features
 
@@ -64,7 +89,7 @@ This version implements the first dispatcher from the specification, **FCFS**. R
   - line-numbered error messages, with every error reported in one pass,
   - a check that arrival times never decrease.
 - **Clear terminal output.** Every event carries the dispatcher clock (`[T=n]`). The final summary table shows start, finish, waiting time, turnaround time, the real elapsed seconds and each job's result.
-- **Automated test suite** (`make test`): 25 tests with real child processes. Each one checks exit codes and output, and confirms that no worker process is left running.
+- **Automated test suite** (`make test`): 29 tests with real child processes, including the project sheet's two example lists exactly as written. Each one checks exit codes and output, and confirms that no worker process is left running.
 
 ## 3. Operating Systems concepts demonstrated
 
@@ -86,16 +111,19 @@ This version implements the first dispatcher from the specification, **FCFS**. R
 
 ## 4. Architecture
 
-Everything is in **one self-contained C file**, `src/batch_monitor.c` (about 1,250 lines, heavily commented), so it can be submitted and compiled on its own. The specification suggested an optional `include/batch_monitor.h`. It is deliberately left out: a header used by a single `.c` file adds a second file to submit and explains nothing new.
+The dispatcher is **one self-contained C file**, `src/batch_monitor.c` (about 1,300 lines, heavily commented), so it can be submitted and compiled on its own. The specification suggested an optional `include/batch_monitor.h`. It is deliberately left out: a header used by a single `.c` file adds a second file to submit and explains nothing new.
 
 ```
 batch-process-monitor/
 ├── src/
-│   └── batch_monitor.c        # the dispatcher (the file to submit)
+│   ├── batch_monitor.c        # the dispatcher (the file to submit)
+│   └── sleepy.c               # the sheet's example program (sleepy N / sleepy)
 ├── tests/
 │   ├── test_worker.c          # safe helper job: sleeps/spins, prints, exits as told
 │   ├── run_tests.sh           # automated test suite (make test)
-│   ├── jobs_basic.txt         # spec example, full 8-field format
+│   ├── jobs_sheet_processlist.txt # the sheet's process list, exactly as given (make run)
+│   ├── jobs_sheet_sleepy.txt  # the sheet's "0,sleepy 3" list, exactly as given
+│   ├── jobs_basic.txt         # spec example, 8 fields + sleep commands
 │   ├── jobs_simple_format.txt # spec example, simple format
 │   ├── jobs_single.txt        # one job at T=0
 │   ├── jobs_equal_arrival.txt # several jobs at T=0 (file order kept)
@@ -232,19 +260,24 @@ Each line is one job. Blank lines are ignored, and so are lines whose first non-
 
 A simple-format job has **no CPU-time budget**: it runs until it exits by itself (pure FCFS).
 
-**Format 2: full metadata.** These are the specification's 8 fields with the command appended:
+**Format 2: full metadata.** These are the project sheet's 8 fields, optionally followed by a command:
 
 ```
-<arrival>,<priority>,<CPU time>,<memory>,<res1>,<res2>,<res3>,<res4>,<command and arguments>
+<arrival>,<priority>,<CPU time>,<memory>,<res1>,<res2>,<res3>,<res4>[,<command and arguments>]
 ```
 ```
+0, 0, 3, 64, 0, 0, 0, 0
 0,0,3,64,0,0,0,0,sleep 3
-2,0,6,64,0,0,0,0,./build/test_worker 4 --name "job two"
+2,0,6,64,0,0,0,0,test_worker 4 --name "job two"
 ```
+
+The first line is the sheet's format exactly. It has **no command**, so the dispatcher runs the default program `sleepy`. `sleepy` keeps running until the job's CPU time runs out and the dispatcher stops it with SIGINT, so each job lasts exactly its `cputime`.
+
+**Bundled programs without a path.** On start-up, the dispatcher puts its own directory (`build/`) first in `PATH`, and children inherit it. A command can therefore say `sleepy 3` or `test_worker 2`, exactly as on the sheet, instead of `./build/sleepy 3`.
 
 ### How a line is parsed
 
-1. **Choosing the format.** If the field after the first comma is an integer, the line is in the full format and must contain all 8 numeric fields followed by a command. Otherwise it is in the simple format.
+1. **Choosing the format.** If the field after the first comma is an integer, the line is in the full format and must contain all 8 numeric fields, optionally followed by a command (default: `sleepy`). Otherwise it is in the simple format.
 2. **The command.** Everything after the 8th comma (full format) or after the 1st comma (simple format) is the command. The command may therefore contain commas: `0,echo a,b` prints `a,b`.
 3. **Splitting into arguments.** The command is split into arguments at spaces and tabs. Single or double quotes group words, so `--name "two words"` is one argument (the quotes are removed). There are no shell features: pipes, `>`, `$VAR` and `*` are passed through literally. If you need them, run a shell explicitly: `0,sh -c 'ls | wc -l'`.
 4. **Whitespace.** Spaces around every field and around the command are trimmed. Windows `\r\n` line endings are accepted.
@@ -258,7 +291,7 @@ Every line is checked. All errors are reported together, as `file:line: error: �
 | Numbers must be integers | `arrival time 'abc' is not a valid integer` |
 | No negative fields | `arrival time must not be negative (got -1)` |
 | CPU time ≥ 1 | `CPU time must be at least 1 tick (got 0)` |
-| All 8 fields + a command | `found the 8 metadata fields but no command` |
+| All 8 numeric fields | `metadata format needs 8 numeric fields (optionally followed by a command), but only 7 field(s) were found` |
 | Comma separator | `missing ',': expected '<arrival>,<command>' or …` |
 | Balanced quotes | `unterminated ' quote in command` |
 | At most 63 arguments | `command has more than 63 arguments` |
@@ -282,7 +315,7 @@ Lines are read with `getline()`, which grows its buffer as needed, so there is *
 The project needs **Linux** with `gcc` and `make` (on Ubuntu or Debian: `sudo apt install build-essential`). No other libraries are needed, and nothing needs root.
 
 ```bash
-make                 # builds build/batch_monitor and build/test_worker
+make                 # builds build/batch_monitor, build/sleepy and build/test_worker
 ```
 
 The exact commands `make` runs:
@@ -290,6 +323,7 @@ The exact commands `make` runs:
 ```bash
 mkdir -p build
 gcc -std=c11 -Wall -Wextra -Wpedantic -O2 -g -o build/batch_monitor src/batch_monitor.c
+gcc -std=c11 -Wall -Wextra -Wpedantic -O2 -g -o build/sleepy src/sleepy.c
 gcc -std=c11 -Wall -Wextra -Wpedantic -O2 -g -o build/test_worker tests/test_worker.c
 ```
 
@@ -310,13 +344,14 @@ macOS is *not* Linux. It lacks `prctl()`, which the code skips with `#ifdef __li
 ## 10. Usage
 
 ```bash
-./build/batch_monitor tests/jobs_basic.txt      # run a dispatch file
-./build/batch_monitor --help                    # usage
-./build/batch_monitor --version                 # version
-make run                                        # same as the first line
+./build/batch_monitor tests/jobs_sheet_processlist.txt   # the sheet's process list
+./build/batch_monitor tests/jobs_sheet_sleepy.txt        # the sheet's "0,sleepy 3" list
+./build/batch_monitor --help                             # usage
+./build/batch_monitor --version                          # version
+make run                                                 # same as the first line
 ```
 
-Run commands from the **repository root**: the sample files refer to `./build/test_worker`.
+Run commands from the **repository root**: some sample files refer to `./build/test_worker`.
 
 **The test worker.** `build/test_worker` is a safe helper job. It only sleeps (or spins) and prints.
 
@@ -336,8 +371,8 @@ test_worker <seconds> [--exit CODE] [--ignore-sigint] [--abort] [--busy] [--name
 ## 11. Tests
 
 ```bash
-make test            # all 25 tests, about 75 s (real 1-second ticks)
-QUICK=1 make test    # skips the two 20-second spec examples, about 35 s
+make test            # all 29 tests, about 2 minutes (real 1-second ticks)
+QUICK=1 make test    # skips the four 20-second example lists, about 40 s
 make memcheck        # optional: valgrind leak check
 ```
 
@@ -511,7 +546,7 @@ make test
 
 ## 18. Future enhancements
 
-- **Round-Robin dispatcher with a time quantum.** On quantum expiry, send `SIGTSTP`/`SIGSTOP`, re-enqueue the PCB at the tail, and resume it later with `SIGCONT`. The VIVA guide, Q22, describes the design.
+- **Round-Robin dispatcher with a time quantum** (announced on the project sheet as the next part). On quantum expiry, send `SIGTSTP`/`SIGSTOP`, re-enqueue the PCB at the tail, and resume it later with `SIGCONT`. The VIVA guide, Q22, describes the design.
 - Priority queues using the priority field (a multilevel feedback queue, as in the HOST dispatcher).
 - Memory and resource allocation checks before dispatch.
 - Real CPU-time budgets via `getrusage()`, `/proc/<pid>/stat` or `RLIMIT_CPU`.

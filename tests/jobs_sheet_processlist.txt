@@ -1,0 +1,9 @@
+# The process list EXACTLY as given in the project sheet:
+# <arrival time>,<priority>,<cputime>,<memory alloc>,<res1 alloc>,<res2>,<res3>,<res4>
+# No command is given, so each job runs the default program "sleepy", which
+# keeps running until its CPU time runs out and the dispatcher sends SIGINT.
+0, 0, 3, 64, 0, 0, 0, 0
+2, 0, 6, 64, 0, 0, 0, 0
+4, 0, 4, 64, 0, 0, 0, 0
+6, 0, 5, 64, 0, 0, 0, 0
+8, 0, 2, 64, 0, 0, 0, 0

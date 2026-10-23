@@ -18,9 +18,9 @@ This guide gives short, honest answers that match the code in `src/batch_monitor
 | Member | Be ready to explain | Viva questions (Part A) |
 |---|---|---|
 | **Lakshay** (Team Leader) | Overall architecture, the FCFS main loop, `fork()`/`execvp()`, budget expiry, SIGINT/SIGKILL, Ctrl+C handling. Also leads the live demo. | Q1, Q2, Q7, Q8, Q9, Q12, Q15, Q17, Q19, Q22 |
-| **Md Ahab Firoz** | The dispatch-file formats, how a line is parsed and validated, and how commands are split into arguments. | Q5, Q16, Q18, Q20 |
+| **Md Ahab Firoz** | The dispatch-file formats (including sir's commandless process list and the default `sleepy`), how a line is parsed and validated, and how commands are split into arguments. | Q5, Q16, Q18, Q20 |
 | **Akshita Modi** | The PCB, the linked-list queue, `waitpid()`, reaping, zombies, and the summary metrics (waiting and turnaround time). | Q3, Q4, Q6, Q10, Q11, Q13, Q14 |
-| **N. Shanmuka Abhiram** | The test worker, the automated tests, the Makefile, valgrind, and CPU-time budget vs. real CPU use. | Q21, plus "how did you test it?" |
+| **N. Shanmuka Abhiram** | `sleepy.c`, the test worker, the automated tests, the Makefile, valgrind, and CPU-time budget vs. real CPU use. | Q21, plus "how did you test it?" |
 
 ---
 
@@ -169,7 +169,8 @@ When a suspended job reaches the head again, resume it with `kill(pid, SIGCONT)`
 | `parse_int(s, &out)` | Strict integer conversion with `strtol`. The whole string must be a number and must fit in an `int`. |
 | `looks_like_int(start, end)` | Checks whether the second field is a number, which decides simple vs. full format. |
 | `tokenize_command(cmd, p, …)` | Splits the command into `argv` words: on spaces, with quote grouping, at most 63 arguments, NULL-terminated for `execvp`. |
-| `parse_line(raw, …)` | Turns one text line into a PCB. It skips comments and blanks, detects the format, validates every field, and reports errors with the line number. |
+| `parse_line(raw, …)` | Turns one text line into a PCB. It skips comments and blanks, detects the format, validates every field, and reports errors with the line number. A process-list line with no command (`0, 0, 3, 64, 0, 0, 0, 0`) gets the default program `sleepy`. |
+| `add_own_dir_to_path(argv0)` | Puts the dispatcher's own folder (`build/`) first in `PATH`, so a dispatch file can say `sleepy 3` exactly as on the project sheet. |
 | `load_dispatch_file(path, q)` | Opens the file and reads it line by line with `getline` (no length limit). It checks arrival order, counts errors, rejects empty files, and fills the queue. On any error it frees everything and returns exit code 2. |
 
 ### Child lifecycle
@@ -224,15 +225,15 @@ Run everything from the repository root. Make the terminal at least 120 columns 
 | Time | Do this | Say this |
 |---|---|---|
 | 0:00 | `make clean && make` | "A plain C11 build with every warning switched on; zero warnings." |
-| 0:20 | `cat tests/jobs_basic.txt` | "This is the spec's example in the full 8-field format. The last field is the command." |
-| 0:35 | `./build/batch_monitor tests/jobs_basic.txt` | While it runs, point out arrivals while job 1 is running, "Jobs ahead of it", budget counting down, and SIGINT at expiry. At the end: "This is the textbook FCFS Gantt chart: 3, 9, 13, 18, 20. Average wait is 4.6." *(20 s)* |
+| 0:20 | `cat tests/jobs_sheet_processlist.txt` | "This is sir's process list exactly as given: 8 fields, no command. Each job runs `sleepy` until its CPU time runs out." |
+| 0:35 | `make run` (runs `tests/jobs_sheet_processlist.txt`) | While it runs, point out arrivals while job 1 is running, "Jobs ahead of it", budget counting down, and SIGINT at expiry. At the end: "This is the textbook FCFS Gantt chart: 3, 9, 13, 18, 20. Average wait is 4.6." *(20 s)* |
 | 1:20 | `./build/batch_monitor tests/jobs_budget_expiry.txt` | "Job 2 ignores SIGINT, so after 500 ms the dispatcher uses SIGKILL. That is the bounded cleanup." |
 | 1:40 | `./build/batch_monitor tests/jobs_error_cases.txt` | "A missing program, exit code 3, and a crash. Each is detected and reported, and the dispatcher keeps going." |
 | 2:00 | `./build/batch_monitor tests/jobs_interrupt.txt`, then press **Ctrl+C** after 3 s | "The handler only sets a flag. The main loop stops and reaps the child, job 2 is 'not started', and it exits with 130." Then run `echo $?` to show 130. |
 | 2:30 | `pgrep -a test_worker; echo "none left"` | "No orphan workers are left running." |
 | 2:40 | `./build/batch_monitor tests/jobs_malformed.txt` | "Every bad line is reported with its line number, and nothing runs." |
 | 2:55 | `./build/batch_monitor tests/jobs_cpu_vs_wall.txt` | "Both jobs use 2 ticks of budget, but only the spinner used about 2 s of real CPU. The budget is elapsed time, not CPU usage." |
-| 3:15 | `QUICK=1 make test` *(optional, 35 s)* | "23 automated tests with real processes." |
+| 3:15 | `QUICK=1 make test` *(optional, 35 s)* | "25 automated tests with real processes; the full run has 29, including sir's two example lists exactly as given." |
 | 3:50 | Open `src/batch_monitor.c` at `struct pcb`, `launch_job` and `run_dispatcher` | Walk through fork → exec → waitpid. |
 
 **If something goes wrong in the demo:**
@@ -243,6 +244,9 @@ Run everything from the repository root. Make the terminal at least 120 columns 
 ---
 
 ## Part D: Likely follow-up questions
+
+- **What runs when a process-list line has no command?** The default program `sleepy` (`src/sleepy.c`). Started with no argument, it runs until it receives a signal. The dispatcher counts down the job's `cputime` and sends SIGINT when it reaches zero, so each job lasts exactly its CPU time, as in sir's pseudo-code.
+- **Is Round-Robin implemented?** Not yet. The project sheet says it comes next ("more about this soon"). Q22 explains how the same PCB and queue code would be reused for it.
 
 - **Why not do the cleanup inside the signal handler?** Only *async-signal-safe* functions may be called in a handler. `printf`, `malloc` and `free` are not, and calling them could deadlock or corrupt memory. Setting a `sig_atomic_t` flag is safe.
 - **Why `CLOCK_MONOTONIC` instead of `time()`?** The monotonic clock never jumps when the system time is changed (by NTP or the user), and it gives nanosecond resolution.

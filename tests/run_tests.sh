@@ -3,7 +3,7 @@
 #
 # Usage (from the repository root):   make test
 #                               or:   bash tests/run_tests.sh
-#   QUICK=1 make test   skips the two 20-second specification examples.
+#   QUICK=1 make test   skips the four 20-second specification examples.
 #
 # Each test runs the real dispatcher with real child processes and checks the
 # exit code and the output. After every test it also checks that no test_worker
@@ -24,7 +24,7 @@ FAILED_NAMES=()
 CURRENT=""
 CURRENT_OK=1
 
-if [[ ! -x $BM || ! -x build/test_worker ]]; then
+if [[ ! -x $BM || ! -x build/test_worker || ! -x build/sleepy ]]; then
     echo "Build first: make"
     exit 1
 fi
@@ -32,9 +32,9 @@ fi
 begin() { CURRENT="$1"; CURRENT_OK=1; printf '%-62s ' "$1"; }
 bad()   { CURRENT_OK=0; DETAILS+=("    - $1"); }
 end() {
-    if pgrep -x test_worker >/dev/null 2>&1; then
+    if pgrep -x 'test_worker|sleepy' >/dev/null 2>&1; then
         bad "a test_worker process is still running after the test (orphan)"
-        pkill -KILL -x test_worker 2>/dev/null
+        pkill -KILL -x 'test_worker|sleepy' 2>/dev/null
     fi
     if (( CURRENT_OK )); then
         echo "PASS"; PASS=$((PASS + 1))
@@ -145,7 +145,7 @@ run t08_malformed 2 tests/jobs_malformed.txt
 expect "jobs_malformed.txt:4: error: arrival time 'abc' is not a valid integer"
 expect "jobs_malformed.txt:5: error: arrival time must not be negative (got -1)"
 expect "jobs_malformed.txt:6: error: CPU time must be at least 1 tick (got 0)"
-expect "jobs_malformed.txt:7: error: found the 8 metadata fields but no command"
+expect "jobs_malformed.txt:7: error: resource 4 allocation must not be negative (got -5)"
 expect "jobs_malformed.txt:8: error: metadata format needs 8 numeric fields"
 expect "jobs_malformed.txt:9: error: CPU time 'x' is not a valid integer"
 expect "jobs_malformed.txt:10: error: unterminated ' quote in command"
@@ -174,6 +174,16 @@ begin "Parser: CRLF line endings, commas inside a command"
 printf '0,echo one,two\r\n0,0,2,64,0,0,0,0,  echo   spaced   out  \r\n' >"$TMPDIR_T/crlf.txt"
 run p_crlf 0 "$TMPDIR_T/crlf.txt"
 expect "one,two"; expect "spaced out"; expect_result 1 "completed"; end
+
+begin "Sheet format: 8 fields with spaces, no command -> default sleepy"
+printf '0, 0, 2, 64, 0, 0, 0, 0\n' >"$TMPDIR_T/nocmd.txt"
+run p_nocmd 0 "$TMPDIR_T/nocmd.txt"
+expect "[sleepy pid="; expect_times 1 0 2; expect_result 1 "budget expired: SIGINT"; end
+
+begin "Bundled programs found without a path (0,sleepy 1)"
+printf '0,sleepy 1\n' >"$TMPDIR_T/sleepy1.txt"
+run p_sleepy 0 "$TMPDIR_T/sleepy1.txt"
+expect "[sleepy pid="; expect_result 1 "completed (exit 0)"; end
 
 begin "Parser: more than 63 arguments rejected"
 { printf '0,echo'; for i in $(seq 1 70); do printf ' a%d' "$i"; done; echo; } >"$TMPDIR_T/manyargs.txt"
@@ -218,6 +228,19 @@ expect "Received SIGTERM"; end
 
 # ------------------------------------------------ specification examples ----
 if [[ ${QUICK:-0} != 1 ]]; then
+    begin "Project sheet process list, exactly as given (20 s)"
+    run sheet_processlist 0 tests/jobs_sheet_processlist.txt
+    expect_times 1 0 3; expect_times 2 3 9; expect_times 3 9 13
+    expect_times 4 13 18; expect_times 5 18 20
+    for j in 1 2 3 4 5; do expect_result $j "budget expired: SIGINT"; done
+    expect "Average waiting time: 4.60 ticks.  Average turnaround: 8.60 ticks."; end
+
+    begin "Project sheet command list, 0,sleepy 3 ... exactly as given (20 s)"
+    run sheet_sleepy 0 tests/jobs_sheet_sleepy.txt
+    expect_times 1 0 3; expect_times 2 3 9; expect_times 3 9 13
+    expect_times 4 13 18; expect_times 5 18 20
+    for j in 1 2 3 4 5; do expect_result $j "completed (exit 0)"; done; end
+
     begin "Spec example, simple format: textbook FCFS schedule (20 s)"
     run spec_simple 0 tests/jobs_simple_format.txt
     expect_times 1 0 3; expect_times 2 3 9; expect_times 3 9 13
@@ -229,7 +252,7 @@ if [[ ${QUICK:-0} != 1 ]]; then
     expect_times 1 0 3; expect_times 2 3 9; expect_times 3 9 13
     expect_times 4 13 18; expect_times 5 18 20; end
 else
-    echo "(QUICK=1: skipped the two 20-second specification examples)"
+    echo "(QUICK=1: skipped the four 20-second specification examples)"
 fi
 
 echo "========================================"

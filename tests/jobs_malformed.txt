@@ -4,7 +4,7 @@
 abc,sleep 1
 -1,sleep 1
 1,0,0,64,0,0,0,0,sleep 1
-1,0,3,64,0,0,0,0
+1,0,3,64,0,0,0,-5,sleep 1
 1,0,3,64,0,0,sleep 1
 1,0,x,64,0,0,0,0,sleep 1
 2,echo 'unterminated

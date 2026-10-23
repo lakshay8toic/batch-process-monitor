@@ -1,0 +1,8 @@
+# The command list EXACTLY as given in the project sheet (simple format).
+# "sleepy" is src/sleepy.c, built into build/sleepy next to the dispatcher.
+# The simple format has no CPU-time budget: each sleepy exits by itself.
+0,sleepy 3
+2,sleepy 6
+4,sleepy 4
+6,sleepy 5
+8,sleepy 2

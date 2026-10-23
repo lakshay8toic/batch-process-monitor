@@ -51,6 +51,7 @@
 #define MAXARGS         64          /* max argv entries per job, incl. NULL  */
 #define METADATA_FIELDS 8           /* arrival,priority,cpu,mem,res1..res4    */
 #define NO_BUDGET       (-1)        /* simple format: no CPU-time budget      */
+#define DEFAULT_PROGRAM "sleepy"    /* run for 8-field lines with no command  */
 
 #define NS_PER_SEC      1000000000L
 #define TICK_NS         NS_PER_SEC  /* one dispatcher tick = 1 second         */
@@ -431,12 +432,15 @@ static int tokenize_command(const char *cmd, PcbPtr p, const char *file, int lin
  * Parse one line of the dispatch file. Two formats are accepted:
  *
  *   simple:  <arrival>,<command and arguments>
- *   full:    <arrival>,<priority>,<cpu>,<memory>,<r1>,<r2>,<r3>,<r4>,<command>
+ *   full:    <arrival>,<priority>,<cpu>,<memory>,<r1>,<r2>,<r3>,<r4>[,<command>]
  *
  * Rule: if the field after the first comma is an integer, the line is the
- * full format and must have all 8 numeric fields followed by a command.
- * Everything after the 8th comma (or the 1st, in simple format) is the
- * command, so the command itself may contain commas.
+ * full format and must have all 8 numeric fields. Everything after the 8th
+ * comma (or the 1st, in simple format) is the command, so the command itself
+ * may contain commas. A full-format line with no command (exactly the
+ * process-list format from the project sheet, e.g. "0, 0, 3, 64, 0, 0, 0, 0")
+ * runs the default program DEFAULT_PROGRAM ("sleepy"), which keeps running
+ * until the dispatcher stops it when its CPU-time budget expires.
  */
 static ParseResult parse_line(char *raw, const char *file, int lineno, PcbPtr *out)
 {
@@ -469,21 +473,23 @@ static ParseResult parse_line(char *raw, const char *file, int lineno, PcbPtr *o
         for (int i = 1; i < METADATA_FIELDS; i++) {
             char *c = strchr(cursor, ',');
             if (!c) {
-                if (i + 1 == METADATA_FIELDS)
-                    parse_error(file, lineno,
-                                "found the 8 metadata fields but no command; "
-                                "add ',<command>' after the 8th field");
-                else
-                    parse_error(file, lineno,
-                                "metadata format needs 8 numeric fields followed by a "
-                                "command, but only %d field(s) were found", i + 1);
+                if (i + 1 == METADATA_FIELDS) {
+                    fields[i] = cursor; /* 8th field, and no command follows */
+                    cursor = NULL;
+                    break;
+                }
+                parse_error(file, lineno,
+                            "metadata format needs 8 numeric fields (optionally followed "
+                            "by a command), but only %d field(s) were found", i + 1);
                 return PARSE_ERROR;
             }
             *c = '\0';
             fields[i] = cursor;
             cursor = c + 1;
         }
-        command = trim(cursor);
+        command = cursor ? trim(cursor) : (char *)"";
+        if (*command == '\0')
+            command = (char *)DEFAULT_PROGRAM; /* project-sheet format: no command */
         for (int i = 0; i < METADATA_FIELDS; i++) {
             char *f = trim(fields[i]);
             if (!parse_int(f, &values[i])) {
@@ -1177,6 +1183,41 @@ static int install_signal_handlers(void)
     return 0;
 }
 
+/*
+ * Put the directory containing this dispatcher first in PATH, so that job
+ * commands can name the programs built next to it (e.g. "0,sleepy 3" from the
+ * project sheet finds build/sleepy). Children inherit PATH through fork/exec.
+ */
+static void add_own_dir_to_path(const char *argv0)
+{
+    const char *slash = strrchr(argv0, '/');
+    if (!slash)
+        return; /* started through PATH: its directory is already searchable */
+
+    size_t dlen = slash == argv0 ? 1 : (size_t)(slash - argv0);
+    char *dir = malloc(dlen + 1);
+    if (!dir)
+        return;
+    memcpy(dir, argv0, dlen);
+    dir[dlen] = '\0';
+    char *abs = realpath(dir, NULL);
+    free(dir);
+    if (!abs)
+        return;
+
+    const char *old = getenv("PATH");
+    if (!old || !*old)
+        old = "/usr/local/bin:/usr/bin:/bin";
+    size_t n = strlen(abs) + 1 + strlen(old) + 1;
+    char *path = malloc(n);
+    if (path) {
+        snprintf(path, n, "%s:%s", abs, old);
+        setenv("PATH", path, 1);
+        free(path);
+    }
+    free(abs);
+}
+
 static void print_usage(FILE *out)
 {
     fprintf(out,
@@ -1188,12 +1229,15 @@ static void print_usage(FILE *out)
             "\n"
             "Dispatch-file lines (blank lines and lines starting with # are ignored):\n"
             "  <arrival>,<command and arguments>\n"
-            "  <arrival>,<priority>,<cpu>,<memory>,<r1>,<r2>,<r3>,<r4>,<command and arguments>\n"
+            "  <arrival>,<priority>,<cpu>,<memory>,<r1>,<r2>,<r3>,<r4>[,<command and arguments>]\n"
             "\n"
             "<cpu> is a budget in ticks; when it runs out the job is sent SIGINT\n"
             "(then SIGKILL if it has not exited after %d ms). The simple format has\n"
-            "no budget: the job runs until it exits. Lines must be in non-decreasing\n"
-            "arrival order. Words in a command may be grouped with quotes.\n"
+            "no budget: the job runs until it exits. A full-format line without a\n"
+            "command runs the default program 'sleepy' until its budget expires.\n"
+            "Lines must be in non-decreasing arrival order. Words in a command may be\n"
+            "grouped with quotes. Programs built next to the dispatcher (sleepy,\n"
+            "test_worker) can be named without a path.\n"
             "\n"
             "Example:  %s tests/jobs_basic.txt\n",
             PROGRAM_NAME, PROGRAM_NAME, KILL_GRACE_MS, PROGRAM_NAME);
@@ -1227,6 +1271,7 @@ int main(int argc, char *argv[])
 
     memset(&d, 0, sizeof d);
     queue_init(&d.queue);
+    add_own_dir_to_path(argv[0]);
 
     print_banner();
     rc = load_dispatch_file(argv[1], &d.queue);
