@@ -1,4 +1,4 @@
-# Viva Guide: Batch Process Monitor (FCFS and Round-Robin Dispatchers)
+# Viva Guide: Batch Process Monitor (FCFS Dispatcher)
 
 This guide gives short, honest answers that match the code in `src/batch_monitor.c`. Where an answer names a function, that function exists in the source.
 
@@ -17,7 +17,7 @@ This guide gives short, honest answers that match the code in `src/batch_monitor
 
 | Member | Be ready to explain | Viva questions (Part A) |
 |---|---|---|
-| **Lakshay** (Team Leader) | Overall architecture, the FCFS and Round-Robin loops, `fork()`/`execvp()`, budget expiry, SIGINT/SIGKILL, SIGTSTP/SIGCONT/SIGSTOP, Ctrl+C handling. Also leads the live demo. | Q1, Q2, Q7, Q8, Q9, Q12, Q15, Q17, Q19, Q22, RR1–RR8 |
+| **Lakshay** (Team Leader) | Overall architecture, the FCFS main loop, `fork()`/`execvp()`, budget expiry, SIGINT/SIGKILL, Ctrl+C handling. Also leads the live demo. | Q1, Q2, Q7, Q8, Q9, Q12, Q15, Q17, Q19, Q22 |
 | **Md Ahab Firoz** | The dispatch-file formats (including sir's commandless process list and the default `sleepy`), how a line is parsed and validated, and how commands are split into arguments. | Q5, Q16, Q18, Q20 |
 | **Akshita Modi** | The PCB, the linked-list queue, `waitpid()`, reaping, zombies, and the summary metrics (waiting and turnaround time). | Q3, Q4, Q6, Q10, Q11, Q13, Q14 |
 | **N. Shanmuka Abhiram** | `sleepy.c`, the test worker, the automated tests, the Makefile, valgrind, and CPU-time budget vs. real CPU use. | Q21, plus "how did you test it?" |
@@ -136,51 +136,15 @@ The program exits with status **130** (128 + 2), the shell convention. SIGTERM a
 
 A `sleep 3` uses 3 ticks of budget but almost **0 s** of CPU, because it is blocked the whole time. `tests/jobs_cpu_vs_wall.txt` demonstrates this: a sleeping worker and a `--busy` spinning worker each use 2 ticks, but the spinner prints `actual CPU time used: 1.98 s`. To enforce *real* CPU time, you would read `/proc/<pid>/stat` or use `setrlimit(RLIMIT_CPU)`.
 
-**22. How does the design change for Round-Robin scheduling? (Implemented: `--rr`)**
-It reuses the same PCB, queue functions, reaping and summary, and adds four things:
+**22. How would the design change to implement Round-Robin scheduling?**
+Add a **time quantum** *q*, for example 2 ticks. When the current job has run *q* ticks and has not finished:
 
-1. **A second queue.** The *input queue* holds jobs that have not arrived yet. The *RR queue* holds arrived jobs waiting for the CPU, both new and suspended.
-2. **A quantum counter** in the PCB (`quantum_used`).
-3. **Suspend.** When the quantum is used up and someone is waiting, `suspend_current()` sends `kill(pid, SIGTSTP)`, confirms the stop with `waitpid(..., WUNTRACED)`, sets the state to SUSPENDED, and appends the PCB to the tail of the RR queue.
-4. **Resume.** When a suspended job reaches the head again, `resume_job()` sends `kill(pid, SIGCONT)` instead of forking again, because its PCB already has a PID.
+1. pause it with `kill(pid, SIGTSTP)`, or `SIGSTOP` if it might ignore SIGTSTP;
+2. set its state to SUSPENDED;
+3. **append its PCB to the tail** of a ready queue;
+4. dispatch the next head.
 
-With sir's job list and q = 1, the output matches Stallings Figure 9.5 exactly.
-
-## Part A2: Round-Robin questions
-
-**RR1. What is Round-Robin scheduling?**
-A preemptive policy. Each ready job gets the CPU for at most one *time quantum*, then goes to the back of the queue if others are waiting. Every job gets a fair share and a quick first response. Mine uses a quantum of 1 tick by default (`--quantum N` to change it).
-
-**RR2. Why two queues (input queue and RR queue)?**
-The input queue holds the whole file in arrival order, including jobs from the "future". The RR queue holds only jobs that have *arrived* and are ready to run. Each tick, `unload_arrivals()` moves every job with `arrivaltime <= timer` from the input queue to the RR queue. Keeping them apart means a job that hasn't arrived can never be scheduled.
-
-**RR3. What do SIGTSTP, SIGSTOP and SIGCONT do?**
-- `SIGTSTP` is the "terminal stop" signal, the same one Ctrl+Z sends. Its default action **stops** (pauses) the process, but a program may catch or ignore it.
-- `SIGSTOP` also stops the process, but it can **never** be caught or ignored.
-- `SIGCONT` makes a stopped process continue from exactly where it was.
-
-A stopped process keeps all its memory and state; it just isn't scheduled by the kernel. In `ps` it shows state **T**.
-
-**RR4. How do you know the child really stopped?**
-After `SIGTSTP`, the dispatcher calls `waitpid(pid, &status, WNOHANG | WUNTRACED)`. `WUNTRACED` makes `waitpid` also report *stopped* children, which `WIFSTOPPED(status)` detects. If the child has not stopped within 500 ms (it ignored SIGTSTP), the dispatcher sends `SIGSTOP` and waits for the stop.
-
-**RR5. Why are new arrivals moved to the RR queue *before* the running job is preempted?**
-Because that is the order in sir's algorithm and in Stallings' figure. A job arriving at the same tick as a preemption gets in line *ahead* of the preempted job. For example, at T=4, C arrives and is queued before B is put back, so C runs at T=5 and B at T=6. The opposite order would produce a different schedule from Figure 9.5.
-
-**RR6. What happens if the quantum expires but no other job is waiting?**
-The job keeps the CPU and its quantum counter restarts. Suspending and immediately resuming it would be wasted work. D does this at the end of the Stallings run: it runs at T=18 and T=19 without a context switch.
-
-**RR7. Compare FCFS and RR on the same five jobs.**
-
-| Metric | FCFS | RR, q = 1 |
-|---|---|---|
-| Average turnaround | 8.60 ticks | 10.80 ticks |
-| Average waiting | 4.60 ticks | 6.80 ticks |
-
-RR gives each job a quicker first response, so short or interactive jobs do not wait behind long ones (no convoy effect), but it costs more context switches (13 suspensions here). RR's waiting time is turnaround minus CPU ticks, because a job waits in several separate pieces.
-
-**RR8. What happens to suspended jobs on Ctrl+C?**
-They are real, stopped processes, so they must not be left behind. `shut_down()` stops the running job and then, for every suspended job, sends `SIGINT` followed by `SIGCONT`. The SIGCONT is needed because a stopped process cannot act on SIGINT until it runs. Then it reaps each one (with SIGKILL after 500 ms if needed). The test suite and a real terminal Ctrl+C test confirm that no process is left.
+When a suspended job reaches the head again, resume it with `kill(pid, SIGCONT)` instead of forking it again, because its PCB already has a PID. Newly arrived jobs join the ready queue each tick. This needs a second queue (an arrival list feeding a ready queue), a per-job "ticks used in this quantum" counter, and `waitpid` with `WUNTRACED` to see stops. Everything else can be reused: the PCB, the queue functions, reaping and the summary.
 
 ---
 
@@ -224,15 +188,10 @@ They are real, stopped processes, so they must not be left behind. `shut_down()`
 | Function | What it does |
 |---|---|
 | `run_dispatcher(d)` | The main loop, i.e. the spec's algorithm. Each tick: check and decrement the running job's budget (expire it if needed), announce arrivals, dispatch if the CPU is free, then wait for the next tick and increment the clock. Stops when nothing is left, or when the stop flag is set. |
-| `dispatch_next(d)` | FCFS: if nothing is running and the head of the queue has arrived, dequeues it and launches it. Repeats if a launch fails. |
-| `dispatch_next_rr(d)` | RR: if nothing is running, takes the head of the RR queue. A suspended job is resumed (`resume_job`); a new one is started (`launch_job`). |
-| `unload_arrivals(d)` | RR: moves every job whose arrival time has come from the input queue to the back of the RR queue. |
-| `suspend_current(d)` | RR: sends SIGTSTP, confirms the stop with `waitpid(WUNTRACED)`, falls back to SIGSTOP after 500 ms, then puts the PCB at the back of the RR queue. |
-| `resume_job(d, p)` | RR: sends SIGCONT and makes the job the running one again, with a fresh quantum. |
-| `record_tick(d)`, `print_gantt(d)` | Record which job held the CPU in each tick, and draw the Gantt chart at the end (Stallings style). |
+| `dispatch_next(d)` | If nothing is running and the head of the queue has arrived, dequeues it and launches it. Repeats if a launch fails. |
 | `wait_for_tick(d)` | Sleeps until the next one-second boundary (an absolute monotonic deadline, so no drift), in 50 ms slices. It reaps a finished child at once and dispatches the next job at once. Returns early on Ctrl+C. |
 | `announce_arrivals(d)` | Prints "Job n arrived" for jobs whose arrival time is the current tick. |
-| `shut_down(d)` | The Ctrl+C path: stops and reaps the running child **and every suspended child**, and marks queued jobs "not started". |
+| `shut_down(d)` | The Ctrl+C path: stops and reaps the child, and marks queued jobs "not started". |
 
 ### Output, signals and `main`
 
@@ -274,8 +233,7 @@ Run everything from the repository root. Make the terminal at least 120 columns 
 | 2:30 | `pgrep -a test_worker; echo "none left"` | "No orphan workers are left running." |
 | 2:40 | `./build/batch_monitor tests/jobs_malformed.txt` | "Every bad line is reported with its line number, and nothing runs." |
 | 2:55 | `./build/batch_monitor tests/jobs_cpu_vs_wall.txt` | "Both jobs use 2 ticks of budget, but only the spinner used about 2 s of real CPU. The budget is elapsed time, not CPU usage." |
-| 3:15 | `make run-rr` *(20 s)* | "Round-Robin with q = 1 on sir's list. Watch SIGTSTP suspend and SIGCONT resume. The Gantt chart at the end is identical to Stallings Figure 9.5." Optionally, in a second terminal, run `ps -o pid,stat,comm -C sleepy` to show the suspended jobs in state **T**. |
-| 3:45 | `QUICK=1 make test` *(optional, 45 s)* | "30 quick automated tests with real processes; the full run has 35, including sir's three example lists exactly as given." |
+| 3:15 | `QUICK=1 make test` *(optional, 35 s)* | "25 automated tests with real processes; the full run has 29, including sir's two example lists exactly as given." |
 | 3:50 | Open `src/batch_monitor.c` at `struct pcb`, `launch_job` and `run_dispatcher` | Walk through fork → exec → waitpid. |
 
 **If something goes wrong in the demo:**
@@ -288,8 +246,7 @@ Run everything from the repository root. Make the terminal at least 120 columns 
 ## Part D: Likely follow-up questions
 
 - **What runs when a process-list line has no command?** The default program `sleepy` (`src/sleepy.c`). Started with no argument, it runs until it receives a signal. The dispatcher counts down the job's `cputime` and sends SIGINT when it reaches zero, so each job lasts exactly its CPU time, as in sir's pseudo-code.
-- **Is Round-Robin implemented?** Yes: `--rr`, with `--quantum N` (default 1). With sir's job list it reproduces Stallings Figure 9.5 exactly, and `make test` checks the dispatch order tick by tick.
-- **Why not run the next job immediately after SIGTSTP instead of waiting for the stop?** Then two jobs could briefly run at once. Waiting until `waitpid` confirms the stop guarantees only one job ever holds the CPU.
+- **Is Round-Robin implemented?** No. Sir confirmed that FCFS is the required scope for this project. Q22 explains how the same PCB and queue code would be reused if it were added.
 
 - **Why not do the cleanup inside the signal handler?** Only *async-signal-safe* functions may be called in a handler. `printf`, `malloc` and `free` are not, and calling them could deadlock or corrupt memory. Setting a `sig_atomic_t` flag is safe.
 - **Why `CLOCK_MONOTONIC` instead of `time()`?** The monotonic clock never jumps when the system time is changed (by NTP or the user), and it gives nanosecond resolution.

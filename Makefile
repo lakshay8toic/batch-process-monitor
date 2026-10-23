@@ -1,9 +1,8 @@
 # Makefile for the Batch Process Monitor (FCFS dispatcher)
 #
 #   make            build build/batch_monitor, build/sleepy and build/test_worker
-#   make run        run the project sheet's process list (FCFS)
-#   make run-rr     run the project sheet's Round-Robin list (Stallings Fig 9.5)
-#   make test       run the automated test suite (~2.5 min; QUICK=1 for ~45 s)
+#   make run        run the specification's example job list
+#   make test       run the automated test suite (~75 s; QUICK=1 for ~35 s)
 #   make memcheck   run under valgrind to check for leaks (optional)
 #   make clean      delete build/
 
@@ -17,7 +16,7 @@ MONITOR = $(BUILD)/batch_monitor
 WORKER  = $(BUILD)/test_worker
 SLEEPY  = $(BUILD)/sleepy
 
-.PHONY: all run run-rr test memcheck clean
+.PHONY: all run test memcheck clean
 
 all: $(MONITOR) $(SLEEPY) $(WORKER)
 
@@ -36,10 +35,6 @@ $(WORKER): tests/test_worker.c | $(BUILD)
 # Demo: the process list exactly as given in the project sheet.
 run: all
 	./$(MONITOR) tests/jobs_sheet_processlist.txt
-
-# Round-Robin demo: should reproduce Stallings Figure 9.5 (RR, q = 1).
-run-rr: all
-	./$(MONITOR) --rr tests/jobs_rr_stallings.txt
 
 # Automated test suite (real 1-second ticks, real child processes).
 test: all

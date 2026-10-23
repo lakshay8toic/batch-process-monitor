@@ -1,6 +1,6 @@
-# Batch Process Monitor: FCFS and Round-Robin Process Dispatchers in C
+# Batch Process Monitor: FCFS Process Dispatcher in C
 
-A Linux **batch process monitor** that reads a list of jobs from a *dispatch file* and runs them as real child processes using one of two schedulers. **First-Come, First-Served (FCFS)** runs each job to completion. **Round-Robin (RR)** (`--rr`) gives each job a time slice, suspending it with `SIGTSTP` and resuming it later with `SIGCONT`. Both are built on `fork()`, `execvp()`, `waitpid()` and `kill()`, and both enforce a per-job CPU-time budget with `SIGINT`, falling back to `SIGKILL` if a job ignores the interrupt.
+A Linux **batch process monitor** that reads a list of jobs from a *dispatch file* and runs them as real child processes, one at a time, in **First-Come, First-Served (FCFS)** order. It is built on `fork()`, `execvp()`, `waitpid()` and `kill()`, and it enforces a per-job CPU-time budget with `SIGINT`, falling back to `SIGKILL` if a job ignores the interrupt.
 
 *Operating Systems end-semester project, ID 25.*
 
@@ -19,10 +19,10 @@ A Linux **batch process monitor** that reads a list of jobs from a *dispatch fil
 
 | Member | Contribution | Main code / files |
 |---|---|---|
-| **Lakshay** (Team Leader) | Planned the project and the overall architecture, split the work, and built the dispatcher core: the FCFS main loop, launching jobs with `fork()` + `execvp()`, the budget countdown with SIGINT → SIGKILL termination, the Round-Robin dispatcher (input and RR queues, SIGTSTP/SIGCONT suspend and resume, SIGSTOP fallback), and safe Ctrl+C handling. Integrated everyone's parts, reviewed the code and set up the GitHub repository. | `run_dispatcher()`, `dispatch_next()`, `dispatch_next_rr()`, `suspend_current()`, `resume_job()`, `unload_arrivals()`, `wait_for_tick()`, `launch_job()`, `terminate_current()`, `shut_down()`, signal handlers |
+| **Lakshay** (Team Leader) | Planned the project and the overall architecture, split the work, and built the dispatcher core: the FCFS main loop, launching jobs with `fork()` + `execvp()`, the budget countdown with SIGINT → SIGKILL termination, and safe Ctrl+C handling. Integrated everyone's parts, reviewed the code and set up the GitHub repository. | `run_dispatcher()`, `dispatch_next()`, `wait_for_tick()`, `launch_job()`, `terminate_current()`, `shut_down()`, signal handlers |
 | **Md Ahab Firoz** | Built the dispatch-file parser: support for both input formats (including the sheet's commandless process list, which runs the default `sleepy`), splitting commands into arguments (including quotes), validating every field, and line-numbered error messages, plus the check that arrival times never decrease. | `load_dispatch_file()`, `parse_line()`, `tokenize_command()`, `parse_int()`, `trim()` |
-| **Akshita Modi** | Designed the Process Control Block and the linked-list ready queue, and wrote the process-reaping and status code (`waitpid()`, exit status vs. signal) along with the final summary table, the waiting/turnaround-time metrics (FCFS and RR) and the Gantt chart. | `struct pcb`, `enqueue()`, `dequeue()`, `poll_current()`, `finish_current()`, `retire_job()`, `print_summary()`, `print_gantt()`, `record_tick()` |
-| **N. Shanmuka Abhiram** | Owned testing and the build: wrote the `sleepy` program from the sheet, the `test_worker` helper program, all the test dispatch files (including the RR/Stallings list) and the automated test suite, wrote the Makefile, and ran the valgrind memory checks. | `src/sleepy.c`, `tests/test_worker.c`, `tests/run_tests.sh`, `tests/jobs_*.txt`, `Makefile` |
+| **Akshita Modi** | Designed the Process Control Block and the linked-list ready queue, and wrote the process-reaping and status code (`waitpid()`, exit status vs. signal) along with the final summary table and the waiting/turnaround-time metrics. | `struct pcb`, `enqueue()`, `dequeue()`, `poll_current()`, `finish_current()`, `retire_job()`, `print_summary()` |
+| **N. Shanmuka Abhiram** | Owned testing and the build: wrote the `sleepy` program from the sheet, the `test_worker` helper program, all the test dispatch files and the automated test suite, wrote the Makefile, and ran the valgrind memory checks. | `src/sleepy.c`, `tests/test_worker.c`, `tests/run_tests.sh`, `tests/jobs_*.txt`, `Makefile` |
 | **Everyone** | Wrote the documentation (this README and the viva guide) and tested on Linux before submission. | `README.md`, `docs/VIVA_GUIDE.md` |
 
 ---
@@ -48,15 +48,9 @@ Every requirement on the project sheet, and where it is implemented:
 | Sleep one second, increment timer, repeat; the tests come *before* the sleep (sheet's order) | Done | `wait_for_tick()`, then `d->clock++`. Same order as the sheet |
 | Exit when everything has finished | Done | the loop ends, the summary is printed, exit 0 |
 | Priority used for scheduling | Not used, on purpose | The sheet says priority matters in *later* dispatchers. FCFS ignores it; it is stored and shown as metadata |
-| **Round-Robin dispatcher** | Done | `--rr` (§7b) |
-| RR: input queue + RR queue | Done | `Dispatcher.queue` (input) and `Dispatcher.rrqueue` |
-| RR: unload pending processes, input → RR queue, while head.arrival ≤ timer | Done | `unload_arrivals()`, the first step of every tick, as on the sheet |
-| RR: decrement `remainingcputime`; if time's up, SIGINT and free | Done | same code path as FCFS |
-| RR: else if others are waiting, **SIGTSTP** to suspend and enqueue it back | Done | `suspend_current()` (confirms the stop with `waitpid(WUNTRACED)`; SIGSTOP if SIGTSTP is ignored) |
-| RR: if nothing running, dequeue; **SIGCONT** if suspended, else fork & exec | Done | `dispatch_next_rr()` → `resume_job()` or `launch_job()` |
-| RR: sheet's job list with q = 1 must reproduce **Stallings Fig. 9.5** | Done, and checked | `tests/jobs_rr_stallings.txt`. The dispatch order, finish times and Gantt chart match the figure tick for tick, and `make test` checks them |
+| Round-Robin dispatcher | Not required | The instructor confirmed FCFS is the required scope. The design for adding it is in §18 and viva Q22 |
 
-Running the sheet's process list produces the textbook FCFS schedule: jobs finish at 3, 9, 13, 18 and 20, average waiting time 4.60, average turnaround 8.60. Running the RR job list with `--rr` produces Stallings Figure 9.5 exactly: finish times A=4, B=18, C=17, D=20, E=15, mean turnaround 10.80. Both are checked automatically by `make test`.
+Running the sheet's process list produces the textbook FCFS schedule: jobs finish at 3, 9, 13, 18 and 20, average waiting time 4.60, average turnaround 8.60. This is checked automatically by `make test`.
 
 ## 1. Academic objective
 
@@ -69,15 +63,13 @@ The project shows how an operating system's **dispatcher** manages processes:
 - stopping it when its time is up, and
 - cleaning up after it, with no zombies or orphans.
 
-This version implements both dispatchers from the project sheet, exactly as specified (see §0, *Project-sheet compliance*): **FCFS** (the default) and **Round-Robin** (`--rr`, quantum 1 by default). The Round-Robin dispatcher is the first step towards the multilevel feedback dispatcher of Project 2, which is essentially several RR queues.
+This project implements the **FCFS dispatcher** from the project sheet, exactly as specified (see §0, *Project-sheet compliance*). The instructor confirmed that FCFS is the required scope, so the Round-Robin dispatcher mentioned on the sheet is **not part of this project**. §18 describes how it could be added later.
 
 ## 2. Features
 
 - **Real processes.** Every job runs through `fork()` + `execvp()`. Nothing is simulated.
 - **Linked-list ready queue** of Process Control Blocks (PCBs), with separate head and tail pointers. The running process is tracked separately as `current`.
 - **Strict FCFS order.** Jobs run in arrival order. Jobs that arrive together run in file order, and a later job can never overtake an earlier one.
-- **Round-Robin with a time quantum** (`--rr [--quantum N]`). A job that has used its slice while others wait is suspended with `SIGTSTP` (or `SIGSTOP` if it ignores that), moved to the back of the RR queue, and resumed later with `SIGCONT`. On the sheet's job list it reproduces Stallings Figure 9.5 exactly.
-- **Gantt chart** printed at the end of every run, in the same layout as Stallings' figures.
 - **Arrival times are respected.** No job starts before it arrives. While nothing has arrived yet, the CPU is idle and the output says so.
 - **CPU-time budget.** The budget is decremented once per one-second dispatcher tick. When it reaches zero, the dispatcher sends `SIGINT`. If the child is still alive 500 ms later, it sends `SIGKILL`.
 - **Every child is reaped** with `waitpid()`. The output distinguishes four outcomes:
@@ -97,7 +89,7 @@ This version implements both dispatchers from the project sheet, exactly as spec
   - line-numbered error messages, with every error reported in one pass,
   - a check that arrival times never decrease.
 - **Clear terminal output.** Every event carries the dispatcher clock (`[T=n]`). The final summary table shows start, finish, waiting time, turnaround time, the real elapsed seconds and each job's result.
-- **Automated test suite** (`make test`): 35 tests with real child processes, including the project sheet's three example lists exactly as written (two FCFS, one Round-Robin). Each one checks exit codes and output, and confirms that no worker process is left running.
+- **Automated test suite** (`make test`): 29 tests with real child processes, including the project sheet's two example lists exactly as written. Each one checks exit codes and output, and confirms that no worker process is left running.
 
 ## 3. Operating Systems concepts demonstrated
 
@@ -111,8 +103,6 @@ This version implements both dispatchers from the project sheet, exactly as spec
 | Process termination, exit status | `waitpid()`, `WIFEXITED`, `WEXITSTATUS`, `WIFSIGNALED`, `WTERMSIG` in `finish_current()` |
 | Zombie prevention | `poll_current()` (non-blocking `waitpid` every 50 ms) and blocking reaps after exec failure or `SIGKILL` |
 | Signals | `kill(pid, SIGINT)`, `kill(pid, SIGKILL)`; `sigaction()` handler for Ctrl+C |
-| Preemption, suspend/resume | `kill(pid, SIGTSTP)` / `SIGSTOP` in `suspend_current()`, `kill(pid, SIGCONT)` in `resume_job()`, `waitpid(…, WUNTRACED)` to confirm the stop |
-| Round-Robin scheduling | input queue → RR queue, time quantum, re-queue at the tail (`run_dispatcher()`, `dispatch_next_rr()`) |
 | Async-signal safety | the handler only writes a `volatile sig_atomic_t` flag |
 | `EINTR` handling | `waitpid()`, `read()`, `nanosleep()` loops |
 | Process groups | `setpgid()`: each job gets its own group, so Ctrl+C reaches only the dispatcher |
@@ -133,7 +123,6 @@ batch-process-monitor/
 │   ├── run_tests.sh           # automated test suite (make test)
 │   ├── jobs_sheet_processlist.txt # the sheet's process list, exactly as given (make run)
 │   ├── jobs_sheet_sleepy.txt  # the sheet's "0,sleepy 3" list, exactly as given
-│   ├── jobs_rr_stallings.txt  # the sheet's Round-Robin list (make run-rr)
 │   ├── jobs_basic.txt         # spec example, 8 fields + sleep commands
 │   ├── jobs_simple_format.txt # spec example, simple format
 │   ├── jobs_single.txt        # one job at T=0
@@ -255,64 +244,6 @@ For the specification's example, the schedule produced is the textbook FCFS Gant
 
 Average waiting time is 4.60 ticks and average turnaround is 8.60 ticks.
 
-## 7b. Round-Robin scheduling (`--rr`)
-
-```bash
-./build/batch_monitor --rr tests/jobs_rr_stallings.txt          # quantum 1 (as on the sheet)
-./build/batch_monitor --rr --quantum 2 tests/jobs_rr_stallings.txt
-make run-rr
-```
-
-Round-Robin is **preemptive**. Each job gets the CPU for at most one *quantum* (default 1 tick). If other jobs are waiting when the quantum is used up, the running job is paused and goes to the back of the queue. If nobody is waiting, it simply keeps the CPU.
-
-There are two queues: the **input queue** (jobs that have not arrived yet) and the **RR queue** (jobs that have arrived and are waiting for the CPU, both new and suspended). Every tick runs the sheet's algorithm in the sheet's order:
-
-1. **Unload arrivals:** while the head of the input queue has `arrivaltime <= timer`, move it to the back of the RR queue.
-2. **If a job is running:** decrement `remainingcputime`.
-   - If it reaches 0, send `SIGINT` and free the PCB, as in FCFS.
-   - Otherwise, if its quantum is used up and the RR queue is not empty, send **`SIGTSTP`** to suspend it and enqueue it at the back of the RR queue.
-3. **If no job is running:** dequeue the head of the RR queue.
-   - If it was started before (it has a PID and is suspended), send **`SIGCONT`** to restart it.
-   - Otherwise start it with `fork()` + `execvp()`.
-4. **Sleep one tick** and increment the timer.
-
-**Why step 1 comes first.** A job that arrives in the same tick as a preemption is queued *ahead* of the preempted job. That is exactly how Stallings Figure 9.5 orders them. For example, at T=4 job C arrives just as B is waiting, and C runs before B gets its next turn.
-
-**Making the suspend reliable:**
-
-- `SIGTSTP` is a polite stop request (the signal Ctrl+Z sends), so a program can catch or ignore it. After sending it, `suspend_current()` checks with `waitpid(pid, …, WNOHANG | WUNTRACED)` that the child really is stopped.
-- If the child has not stopped within 500 ms, the dispatcher sends `SIGSTOP`, which cannot be caught or ignored. `tests/test_worker --ignore-sigtstp` tests this path.
-- While a job is suspended, its process is in state **T** (stopped) in `ps`, and the test suite checks this.
-- On Ctrl+C, every suspended job is also sent `SIGINT` + `SIGCONT` (a stopped process cannot act on SIGINT until it runs), then reaped. No stopped processes are left behind.
-
-**Real output** for the sheet's job list, `./build/batch_monitor --rr tests/jobs_rr_stallings.txt`, where the jobs are labelled A–E as in Stallings:
-
-```
-JOB  PID      COMMAND                       ARRIVE  BUDGET  START  FINISH  WAIT  TURN  ELAPSED  RESULT
----  -------  ----------------------------  ------  ------  -----  ------  ----  ----  -------  ------------------------
-  1  243      sleepy                             0       3      0       4     1     4     4.05  budget expired: SIGINT
-  2  244      sleepy                             2       6      2      18    10    16    16.04  budget expired: SIGINT
-  3  245      sleepy                             4       4      5      17     9    13    12.04  budget expired: SIGINT
-  4  246      sleepy                             6       5      7      20     9    14    13.04  budget expired: SIGINT
-  5  248      sleepy                             8       2     10      15     5     7     5.04  budget expired: SIGINT
-
-Jobs started: 5 of 5.  Average waiting time: 6.80 ticks.  Average turnaround: 10.80 ticks.
-Dispatcher ran for 20 tick(s) (20.05 s real time), CPU idle for 0 tick(s).
-
-Gantt chart (one column = one tick, # = job holds the CPU):
-            0    5    10   15   20 
-            |....|....|....|....|
-A (Job 1)   ## #                
-B (Job 2)     # # #  #   #   #  
-C (Job 3)        #  #   #   #   
-D (Job 4)          #   #   #  ##
-E (Job 5)             #   #     
-```
-
-This is **identical to Stallings Figure 9.5 (RR, q = 1)**. The turnaround times are A=4, B=16, C=13, D=14, E=7 (mean 10.80), which match Stallings' table. The same five jobs under FCFS have mean turnaround 8.60. RR gives short jobs a quicker first response, at the cost of a longer average turnaround here.
-
-In RR mode, **WAIT = turnaround − ticks on the CPU**: the total time a job spent ready in the RR queue, across all its turns. In FCFS this equals start − arrival.
-
 ## 8. Dispatch-file format
 
 Each line is one job. Blank lines are ignored, and so are lines whose first non-space character is `#`. Two formats are accepted, and they can be mixed in one file.
@@ -418,9 +349,6 @@ macOS is *not* Linux. It lacks `prctl()`, which the code skips with `#ifdef __li
 ./build/batch_monitor --help                             # usage
 ./build/batch_monitor --version                          # version
 make run                                                 # same as the first line
-./build/batch_monitor --rr tests/jobs_rr_stallings.txt   # Round-Robin, quantum 1
-./build/batch_monitor --rr --quantum 2 FILE              # Round-Robin, quantum 2
-make run-rr                                              # the RR list with --rr
 ```
 
 Run commands from the **repository root**: some sample files refer to `./build/test_worker`.
@@ -428,7 +356,7 @@ Run commands from the **repository root**: some sample files refer to `./build/t
 **The test worker.** `build/test_worker` is a safe helper job. It only sleeps (or spins) and prints.
 
 ```
-test_worker <seconds> [--exit CODE] [--ignore-sigint] [--ignore-sigtstp] [--abort] [--busy] [--name LABEL]
+test_worker <seconds> [--exit CODE] [--ignore-sigint] [--abort] [--busy] [--name LABEL]
 ```
 
 | Option | Effect |
@@ -436,7 +364,6 @@ test_worker <seconds> [--exit CODE] [--ignore-sigint] [--ignore-sigtstp] [--abor
 | `<seconds>` | how long it runs, printing progress once a second |
 | `--exit CODE` | exits with this status when finished |
 | `--ignore-sigint` | ignores SIGINT, which forces the dispatcher's SIGKILL fallback |
-| `--ignore-sigtstp` | ignores SIGTSTP, which forces Round-Robin's SIGSTOP fallback |
 | `--abort` | crashes with SIGABRT (core dumps are disabled first) |
 | `--busy` | burns real CPU instead of sleeping, and reports its actual CPU time |
 | `--name LABEL` | label printed on every line |
@@ -444,8 +371,8 @@ test_worker <seconds> [--exit CODE] [--ignore-sigint] [--ignore-sigtstp] [--abor
 ## 11. Tests
 
 ```bash
-make test            # all 35 tests, about 2.5 minutes (real 1-second ticks)
-QUICK=1 make test    # skips the five 20-second example lists, about 45 s
+make test            # all 29 tests, about 2 minutes (real 1-second ticks)
+QUICK=1 make test    # skips the four 20-second example lists, about 40 s
 make memcheck        # optional: valgrind leak check
 ```
 
@@ -468,11 +395,6 @@ Each test's full output is saved in `build/test_logs/`. The 15 required scenario
 | 13 | Child ignores SIGINT | `tests/jobs_budget_expiry.txt` (job 2) | "sending SIGKILL (last resort)", "budget expired: SIGKILL" |
 | 14 | Decreasing arrival times | `tests/jobs_decreasing.txt` | "arrival time 3 is earlier than 5 on line 3", exit 2 |
 | 15 | Equal arrivals keep file order | `tests/jobs_equal_arrival.txt` | the order A, B, C is checked |
-| RR-1 | Sheet's RR list = Stallings Fig 9.5 | `--rr tests/jobs_rr_stallings.txt` | the exact dispatch order (18 dispatches), finish times, averages and Gantt rows are checked |
-| RR-2 | Two jobs alternate, q = 1 | generated file | the order 1,2,1,2,1,2 is checked; a suspended child is in state T in `ps` |
-| RR-3 | `--quantum 2` | generated file | each job gets 2 ticks per turn |
-| RR-4 | Job ignores SIGTSTP | `test_worker --ignore-sigtstp` | "sending SIGSTOP (cannot be ignored)" |
-| RR-5 | Ctrl+C with suspended jobs | generated file | every suspended child is stopped and reaped, exit 130 |
 
 There are also extra tests for:
 
@@ -580,8 +502,7 @@ There are several different "times", and the output keeps them apart:
 2. **Exits are detected between ticks.** The dispatcher sleeps in 50 ms slices and checks the child each time. When a job finishes mid-tick, it is reaped immediately and the next eligible job is started immediately, in the same tick. Without this, the CPU would sit idle for the rest of every tick, and each job would start one tick late (we measured 0–3, 4–10, 11–15, … instead of 0–3, 3–9, 9–13, …). Once a tick's deadline has passed, the dispatcher stops checking until the clock has advanced, so a job that exits just after a tick boundary is always credited to the new tick, even when the machine is busy and the dispatcher wakes a few milliseconds late.
 3. **The grace period after SIGINT is 500 ms**, so a well-behaved job stops promptly, while a job that ignores SIGINT is still removed within the same tick.
 4. **A job started mid-tick** gets its first budget decrement at the next tick boundary, so that first tick can be shorter than a full second. Budgets are therefore accurate to within one tick.
-5. **Round-Robin with jobs that sleep.** While a job is suspended, real time keeps passing. A command such as `sleep 6` therefore ends after 6 seconds of *wall-clock* time even if it held the CPU for only a few of those ticks. With the sheet's commandless jobs (`sleepy` runs until stopped) this does not arise: each job ends exactly when its CPU-time budget, counted only while it holds the CPU, reaches zero. That is why the Stallings test uses them.
-6. **When a job's duration equals its budget**, e.g. `sleep 3` with budget 3 in `jobs_basic.txt`, the budget check and the natural exit happen within milliseconds of each other. Usually the budget check wins and SIGINT is reported. On a busy machine the job may instead be reported as "completed". The schedule is the same either way.
+5. **When a job's duration equals its budget**, e.g. `sleep 3` with budget 3 in `jobs_basic.txt`, the budget check and the natural exit happen within milliseconds of each other. Usually the budget check wins and SIGINT is reported. On a busy machine the job may instead be reported as "completed". The schedule is the same either way.
 
 ## 16. GitHub setup
 
@@ -614,8 +535,7 @@ make test
 
 ## 17. Known limitations
 
-- **One job at a time.** This is by design for both dispatchers, but it means no parallelism on multi-core machines.
-- **RR quantum and budgets are whole ticks** (1 s). Context switches happen only at tick boundaries.
+- **One job at a time.** This is by design for FCFS, but it means no parallelism on multi-core machines.
 - **1-second resolution.** Budgets and arrival times are whole ticks, and budget enforcement is accurate to within one tick (see §15).
 - **The budget measures elapsed time, not CPU time** (see §15).
 - **Priority, memory and resource fields are parsed and shown but not enforced.** No memory or resource allocation is simulated.
@@ -626,8 +546,8 @@ make test
 
 ## 18. Future enhancements
 
-- **Multilevel feedback dispatcher** (Project 2): several RR queues, one per priority level. A job that uses its whole quantum drops to a lower-priority queue. This reuses `suspend_current()`, `resume_job()` and the queue code directly.
-- Real-time (priority 0) jobs served FCFS ahead of the feedback queues, using the priority field.
+- **Round-Robin dispatcher with a time quantum** (mentioned on the project sheet, but not required for this project). On quantum expiry, send `SIGTSTP`/`SIGSTOP`, re-enqueue the PCB at the tail, and resume it later with `SIGCONT`. The VIVA guide, Q22, describes the design.
+- Priority queues using the priority field (a multilevel feedback queue, as in the HOST dispatcher).
 - Memory and resource allocation checks before dispatch.
 - Real CPU-time budgets via `getrusage()`, `/proc/<pid>/stat` or `RLIMIT_CPU`.
 - Sub-second ticks (`--tick-ms`), and a CSV export of the summary table.

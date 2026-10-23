@@ -10,21 +10,13 @@
  *   AP24110011380  N. Shanmuka Abhiram
  *
  * The dispatcher reads a list of jobs from a "dispatch file", keeps them in a
- * linked-list queue of Process Control Blocks (PCBs), and runs them with
- * fork(), execvp() and waitpid() using one of two scheduling policies:
- *
- *   FCFS (default)  First-Come, First-Served: each job runs until it finishes.
- *   RR   (--rr)     Round-Robin with a time quantum (default 1 tick): when the
- *                   quantum is used up and another job is waiting, the running
- *                   job is suspended with SIGTSTP, put at the back of the RR
- *                   queue, and later resumed with SIGCONT.
- *
+ * linked-list queue of Process Control Blocks (PCBs), and runs them one at a
+ * time in First-Come, First-Served order using fork(), execvp() and waitpid().
  * A job whose CPU-time budget runs out is sent SIGINT (with a bounded SIGKILL
  * fallback). Every child is reaped, so no zombies or orphans are left behind.
  *
  * Build:  gcc -std=c11 -Wall -Wextra -Wpedantic -O2 -o batch_monitor batch_monitor.c
- * Run:    ./batch_monitor <dispatch-file>                 (FCFS)
- *         ./batch_monitor --rr [--quantum N] <dispatch-file>  (Round-Robin)
+ * Run:    ./batch_monitor <dispatch-file>
  *
  * This file is self-contained: it needs only the C standard library and POSIX.
  */
@@ -54,7 +46,7 @@
 /* ------------------------------------------------------------------------ */
 
 #define PROGRAM_NAME    "batch_monitor"
-#define PROGRAM_VERSION "1.1.0"
+#define PROGRAM_VERSION "1.0.0"
 
 #define MAXARGS         64          /* max argv entries per job, incl. NULL  */
 #define METADATA_FIELDS 8           /* arrival,priority,cpu,mem,res1..res4    */
@@ -65,9 +57,6 @@
 #define TICK_NS         NS_PER_SEC  /* one dispatcher tick = 1 second         */
 #define POLL_NS         50000000L   /* check for child exit every 50 ms       */
 #define KILL_GRACE_MS   500         /* wait this long after SIGINT, then KILL */
-#define STOP_GRACE_MS   500         /* wait this long after SIGTSTP, then STOP */
-#define STOP_POLL_NS    10000000L   /* check for "stopped" every 10 ms        */
-#define GANTT_MAX_TICKS 120         /* widest Gantt chart printed             */
 
 /* Exit codes of the dispatcher itself. */
 #define EXIT_OK      0  /* dispatcher ran every job (job failures are in the summary) */
@@ -83,7 +72,6 @@
 typedef enum {
     STATE_READY,      /* loaded, waiting in the dispatch queue */
     STATE_RUNNING,    /* forked and exec'd, currently managed  */
-    STATE_SUSPENDED,  /* RR only: stopped with SIGTSTP, queued */
     STATE_TERMINATED  /* reaped (or never started)             */
 } ProcState;
 
@@ -127,10 +115,6 @@ struct pcb {
     bool budget_expired;       /* dispatcher sent SIGINT for budget expiry   */
     bool used_sigkill;         /* child ignored SIGINT; SIGKILL was needed   */
     bool interrupted;          /* stopped because the dispatcher was stopped */
-    int quantum_used;          /* RR: ticks used in the current time slice   */
-    long run_ticks;            /* ticks this job has held the CPU            */
-    int suspensions;           /* RR: how many times it was suspended        */
-    bool used_sigstop;         /* RR: ignored SIGTSTP, so SIGSTOP was used   */
 };
 
 typedef struct pcb Pcb;
@@ -157,16 +141,11 @@ typedef struct {
     int exec_errno;
     TermReason reason;
     bool started;
-    long run_ticks;        /* ticks on the CPU                         */
-    int suspensions;       /* RR: times suspended with SIGTSTP/SIGSTOP */
 } JobRecord;
 
 /* Everything the dispatcher owns, in one place. */
 typedef struct {
-    Queue queue;            /* input queue: jobs not yet arrived (RR) or not yet started (FCFS) */
-    Queue rrqueue;          /* RR only: arrived jobs waiting for the CPU (new or suspended)     */
-    bool rr;                /* true = Round-Robin, false = FCFS   */
-    int quantum;            /* RR time quantum, in ticks          */
+    Queue queue;            /* jobs not yet started               */
     PcbPtr current;         /* the one running job, or NULL       */
     long clock;             /* dispatcher timer, in ticks         */
     struct timespec t0;     /* monotonic time at clock = 0        */
@@ -174,9 +153,6 @@ typedef struct {
     JobRecord *records;     /* one record per job, for summary    */
     int njobs;
     long idle_ticks;        /* ticks with no job running          */
-    int *timeline;          /* job id that held the CPU in each tick (0 = idle), for the Gantt chart */
-    long timeline_len;
-    long timeline_cap;
 } Dispatcher;
 
 /* Set by the signal handler; read by the main loop. */
@@ -671,8 +647,6 @@ static void retire_job(Dispatcher *d, PcbPtr p, TermReason reason, int exec_errn
     r->waitstatus = p->waitstatus;
     r->exec_errno = exec_errno;
     r->reason = reason;
-    r->run_ticks = p->run_ticks;
-    r->suspensions = p->suspensions;
 
     p->state = STATE_TERMINATED;
     pcb_free(p);
@@ -757,11 +731,6 @@ static void terminate_current(Dispatcher *d, int sig)
     log_event(d, "Sending %s to PID %d.", signal_name(sig), (int)p->pid);
     if (kill(p->pid, sig) == -1 && errno != ESRCH)
         fprintf(stderr, "warning: kill(%d, %s) failed: %s\n", (int)p->pid, signal_name(sig), strerror(errno));
-    if (p->state == STATE_SUSPENDED) {
-        /* A stopped process cannot act on SIGINT until it runs again. */
-        kill(p->pid, SIGCONT);
-        p->state = STATE_RUNNING;
-    }
 
     for (int waited = 0; waited < KILL_GRACE_MS; waited += (int)(POLL_NS / 1000000L)) {
         if (poll_current(d))
@@ -895,117 +864,8 @@ static bool launch_job(Dispatcher *d, PcbPtr p)
 }
 
 /* ------------------------------------------------------------------------ */
-/* Round-Robin: suspend and resume                                           */
+/* The FCFS dispatcher loop                                                  */
 /* ------------------------------------------------------------------------ */
-
-/*
- * RR preemption: pause the current job and put it at the back of the RR
- * queue. SIGTSTP is the "terminal stop" signal (what Ctrl+Z sends); its
- * default action stops the process. A program may catch or ignore SIGTSTP,
- * so if the child has not stopped within STOP_GRACE_MS we send SIGSTOP, which
- * cannot be caught or ignored. waitpid(..., WUNTRACED) confirms the stop.
- */
-static void suspend_current(Dispatcher *d)
-{
-    PcbPtr p = d->current;
-    int status;
-    pid_t r;
-
-    log_event(d, "Quantum used up and Job %d is waiting: sending SIGTSTP to PID %d.",
-              d->rrqueue.head->jobid, (int)p->pid);
-    if (kill(p->pid, SIGTSTP) == -1 && errno != ESRCH)
-        fprintf(stderr, "warning: kill(%d, SIGTSTP) failed: %s\n", (int)p->pid, strerror(errno));
-
-    for (int waited = 0;; waited += (int)(STOP_POLL_NS / 1000000L)) {
-        do {
-            r = waitpid(p->pid, &status, WNOHANG | WUNTRACED);
-        } while (r == -1 && errno == EINTR);
-        if (r == p->pid && WIFSTOPPED(status))
-            break; /* it has stopped */
-        if (r == p->pid || r == -1) {
-            finish_current(d, r == -1 ? 0 : status); /* it exited instead */
-            return;
-        }
-        if (waited >= STOP_GRACE_MS) {
-            log_event(d, "PID %d did not stop within %d ms of SIGTSTP; sending SIGSTOP (cannot be ignored).",
-                      (int)p->pid, STOP_GRACE_MS);
-            p->used_sigstop = true;
-            kill(p->pid, SIGSTOP);
-            do {
-                r = waitpid(p->pid, &status, WUNTRACED);
-            } while (r == -1 && errno == EINTR);
-            if (r != p->pid || !WIFSTOPPED(status)) {
-                finish_current(d, r == p->pid ? status : 0);
-                return;
-            }
-            break;
-        }
-        sleep_ns_full(STOP_POLL_NS);
-    }
-
-    p->state = STATE_SUSPENDED;
-    p->suspensions++;
-    d->current = NULL;
-    enqueue(&d->rrqueue, p);
-    log_event(d, "PID %d suspended; Job %d goes to the back of the RR queue (position %d).",
-              (int)p->pid, p->jobid, d->rrqueue.count);
-}
-
-/* RR: continue a suspended job with SIGCONT and make it the running job. */
-static void resume_job(Dispatcher *d, PcbPtr p)
-{
-    if (p->remainingcputime == NO_BUDGET)
-        log_event(d, "Resuming Job %d: sending SIGCONT to PID %d.", p->jobid, (int)p->pid);
-    else
-        log_event(d, "Resuming Job %d: sending SIGCONT to PID %d. Remaining budget: %d",
-                  p->jobid, (int)p->pid, p->remainingcputime);
-    if (kill(p->pid, SIGCONT) == -1 && errno != ESRCH)
-        fprintf(stderr, "warning: kill(%d, SIGCONT) failed: %s\n", (int)p->pid, strerror(errno));
-    p->state = STATE_RUNNING;
-    p->quantum_used = 0;
-    d->current = p;
-}
-
-/* RR: move every job whose arrival time has come from the input queue to
- * the back of the RR queue (the sheet's "unload any pending processes"). */
-static void unload_arrivals(Dispatcher *d)
-{
-    while (d->queue.head && d->queue.head->arrivaltime <= d->clock) {
-        PcbPtr p = dequeue(&d->queue);
-        enqueue(&d->rrqueue, p);
-        log_event(d, "Job %d arrived (%s); moved from the input queue to the RR queue (position %d).",
-                  p->jobid, p->cmdline, d->rrqueue.count);
-    }
-}
-
-/* ------------------------------------------------------------------------ */
-/* The dispatcher loop (FCFS and Round-Robin)                                */
-/* ------------------------------------------------------------------------ */
-
-static bool work_left(const Dispatcher *d)
-{
-    return d->queue.head || d->rrqueue.head || d->current;
-}
-
-/* Remember which job holds the CPU during the current tick (Gantt chart). */
-static void record_tick(Dispatcher *d)
-{
-    if (d->clock >= d->timeline_cap) {
-        long cap = d->timeline_cap ? d->timeline_cap * 2 : 64;
-        while (cap <= d->clock)
-            cap *= 2;
-        int *t = realloc(d->timeline, (size_t)cap * sizeof *t);
-        if (!t)
-            return; /* the chart is optional: just stop recording */
-        for (long i = d->timeline_cap; i < cap; i++)
-            t[i] = 0;
-        d->timeline = t;
-        d->timeline_cap = cap;
-    }
-    d->timeline[d->clock] = d->current ? d->current->jobid : 0;
-    if (d->clock + 1 > d->timeline_len)
-        d->timeline_len = d->clock + 1;
-}
 
 /*
  * Steps (d)-(e): if no job is running, dequeue the head of the queue when its
@@ -1023,30 +883,6 @@ static bool dispatch_next(Dispatcher *d)
         launch_job(d, p);
     }
     return d->current != NULL;
-}
-
-/*
- * RR version: if no job is running, take the head of the RR queue. A job
- * that was suspended is restarted with SIGCONT; a new job is started with
- * fork() + exec().
- */
-static bool dispatch_next_rr(Dispatcher *d)
-{
-    while (!d->current && d->rrqueue.head) {
-        PcbPtr p = dequeue(&d->rrqueue);
-        if (p->state == STATE_SUSPENDED) {
-            resume_job(d, p);
-        } else {
-            log_event(d, "Job %d is at the head of the RR queue: first run.", p->jobid);
-            launch_job(d, p);
-        }
-    }
-    return d->current != NULL;
-}
-
-static bool dispatch(Dispatcher *d)
-{
-    return d->rr ? dispatch_next_rr(d) : dispatch_next(d);
 }
 
 /*
@@ -1082,9 +918,8 @@ static void wait_for_tick(Dispatcher *d)
             break;
         if (d->current && poll_current(d)) {
             /* Child finished between ticks: hand the CPU to the next job now. */
-            dispatch(d);
-            record_tick(d); /* this tick now belongs to the new job (or idle) */
-            if (!work_left(d))
+            dispatch_next(d);
+            if (!d->current && !d->queue.head)
                 return; /* everything is done; no need to wait out the tick */
         }
     }
@@ -1103,8 +938,7 @@ static void announce_arrivals(Dispatcher *d)
     }
 }
 
-/* Ctrl+C (or SIGTERM/SIGHUP): stop the running child (and, in RR mode, every
- * suspended child) and discard the jobs that never started. */
+/* Ctrl+C (or SIGTERM/SIGHUP): stop the running child and discard the rest. */
 static void shut_down(Dispatcher *d)
 {
     int sig = (int)g_stop_signal;
@@ -1116,18 +950,6 @@ static void shut_down(Dispatcher *d)
         terminate_current(d, SIGINT);
     }
     PcbPtr p;
-    while ((p = dequeue(&d->rrqueue)) != NULL) {
-        if (p->state == STATE_SUSPENDED) {
-            /* A real, stopped process: terminate and reap it too. */
-            log_event(d, "Job %d (PID %d) is suspended; stopping it as well.", p->jobid, (int)p->pid);
-            d->current = p;
-            p->interrupted = true;
-            terminate_current(d, SIGINT);
-        } else {
-            log_event(d, "Job %d discarded (never started).", p->jobid);
-            retire_job(d, p, REASON_NOT_STARTED, 0);
-        }
-    }
     while ((p = dequeue(&d->queue)) != NULL) {
         log_event(d, "Job %d discarded (never started).", p->jobid);
         retire_job(d, p, REASON_NOT_STARTED, 0);
@@ -1135,26 +957,13 @@ static void shut_down(Dispatcher *d)
 }
 
 /*
- * The algorithms from the project sheet. FCFS:
+ * The algorithm from the specification:
  *   while jobs are queued or one is running:
  *     a-c. if a job is running: decrement its budget; if it has run out,
  *          send SIGINT and reap it (natural exits are reaped as they happen)
  *     d-e. if nothing is running and the head job has arrived, dequeue it,
  *          fork+exec it and make it the current process
  *     f-g. sleep one tick, then increment the dispatcher timer
- *
- * Round-Robin (--rr) adds an input queue and an RR queue:
- *   while anything is in either queue or a job is running:
- *     1. move every job whose arrival time has come: input queue -> RR queue
- *     2. if a job is running: decrement its budget; if it has run out send
- *        SIGINT; else if its quantum is used up and other jobs are waiting,
- *        suspend it with SIGTSTP and put it at the back of the RR queue
- *     3. if nothing is running: dequeue the head of the RR queue; SIGCONT it
- *        if it was suspended, otherwise fork+exec it
- *     4. sleep one tick, then increment the dispatcher timer
- *   Step 1 comes before step 2, so a job arriving at the same tick that the
- *   running job is preempted queues AHEAD of the preempted job - exactly the
- *   order in Stallings, Figure 9.5 (RR, q = 1).
  *
  * Timing adjustment (documented in the README): while sleeping through a tick
  * the dispatcher checks every 50 ms whether the child has exited. If it has,
@@ -1169,20 +978,13 @@ static int run_dispatcher(Dispatcher *d)
     d->next_tick = d->t0;
     log_event(d, "Dispatcher clock initialized to 0.");
 
-    while (work_left(d)) {
+    while (d->queue.head || d->current) {
         if (g_stop_signal)
             break;
-
-        /* RR step 1: unload arrived jobs from the input queue to the RR queue */
-        if (d->rr)
-            unload_arrivals(d);
 
         /* (a)-(c): manage the running process */
         if (d->current && !poll_current(d)) {
             PcbPtr p = d->current;
-            bool ended = false;
-            p->run_ticks++;
-            p->quantum_used++;
             if (p->remainingcputime == NO_BUDGET) {
                 log_event(d, "PID %d running (no budget limit).", (int)p->pid);
             } else {
@@ -1193,40 +995,30 @@ static int run_dispatcher(Dispatcher *d)
                     log_event(d, "CPU-time budget expired for PID %d.", (int)p->pid);
                     p->budget_expired = true;
                     terminate_current(d, SIGINT); /* reaps and frees it */
-                    ended = true;
                 }
-            }
-            /* RR: time slice over? Preempt only if someone else is waiting. */
-            if (!ended && d->rr && d->current && p->quantum_used >= d->quantum) {
-                if (d->rrqueue.head)
-                    suspend_current(d);
-                else
-                    p->quantum_used = 0; /* nobody waiting: it keeps the CPU */
             }
         }
         if (g_stop_signal)
             break;
 
-        if (!d->rr)
-            announce_arrivals(d);
+        announce_arrivals(d);
 
-        /* (d)-(e): dispatch the next job if the CPU is free */
-        dispatch(d);
+        /* (d)-(e): dispatch the head of the queue if the CPU is free */
+        dispatch_next(d);
 
         if (!d->current) {
-            if (!work_left(d))
+            if (!d->queue.head)
                 break; /* nothing running and nothing left: finished */
             log_event(d, "CPU idle. Next job (Job %d) arrives at T=%d.",
                       d->queue.head->jobid, d->queue.head->arrivaltime);
             d->idle_ticks++;
         }
-        record_tick(d);
 
         /* (f)-(g): wait one tick, then advance the dispatcher clock */
         wait_for_tick(d);
         if (g_stop_signal)
             break;
-        if (!work_left(d))
+        if (!d->current && !d->queue.head)
             break; /* the last job finished during this tick */
         d->clock++;
     }
@@ -1243,60 +1035,12 @@ static int run_dispatcher(Dispatcher *d)
 /* Output: banner, job table, summary                                        */
 /* ------------------------------------------------------------------------ */
 
-static void print_banner(const Dispatcher *d)
+static void print_banner(void)
 {
     printf("=============================================\n");
-    printf("        BATCH PROCESS MONITOR  v%s\n", PROGRAM_VERSION);
-    if (d->rr)
-        printf("        ROUND-ROBIN DISPATCHER (quantum = %d)\n", d->quantum);
-    else
-        printf("        FCFS PROCESS DISPATCHER\n");
+    printf("        BATCH PROCESS MONITOR\n");
+    printf("        FCFS PROCESS DISPATCHER  v%s\n", PROGRAM_VERSION);
     printf("=============================================\n\n");
-}
-
-/*
- * Draw which job held the CPU in each tick, one column per tick, in the same
- * style as Stallings Figure 9.5. Jobs are lettered A, B, C, ... in file order.
- */
-static void print_gantt(const Dispatcher *d)
-{
-    long len = d->timeline_len;
-    while (len > 0 && d->timeline[len - 1] == 0)
-        len--; /* drop trailing idle ticks */
-    if (len == 0)
-        return;
-    if (len > GANTT_MAX_TICKS) {
-        printf("\n(Gantt chart not shown: %ld ticks is wider than %d columns.)\n", len, GANTT_MAX_TICKS);
-        return;
-    }
-
-    char ruler[GANTT_MAX_TICKS + 8];
-    memset(ruler, ' ', sizeof ruler);
-    for (long t = 0; t <= len; t += 5) {
-        char num[24];
-        int n = snprintf(num, sizeof num, "%ld", t);
-        if (t + n < (long)sizeof ruler)
-            memcpy(ruler + t, num, (size_t)n);
-    }
-    ruler[len + 3] = '\0';
-
-    printf("\nGantt chart (one column = one tick, # = job holds the CPU):\n");
-    printf("            %s\n", ruler);
-    printf("            ");
-    for (long t = 0; t <= len; t++)
-        putchar(t % 5 == 0 ? '|' : '.');
-    putchar('\n');
-    for (int j = 1; j <= d->njobs; j++) {
-        char label[32];
-        if (d->njobs <= 26)
-            snprintf(label, sizeof label, "%c (Job %d)", 'A' + j - 1, j);
-        else
-            snprintf(label, sizeof label, "Job %d", j);
-        printf("%-12s", label);
-        for (long t = 0; t < len; t++)
-            putchar(d->timeline[t] == j ? '#' : ' ');
-        putchar('\n');
-    }
 }
 
 /*
@@ -1335,7 +1079,7 @@ static void print_job_table(const Queue *q, const char *path)
             printf("%3d  %7d  %6s  %4s  %4s  %-9s  %s\n", p->jobid, p->arrivaltime,
                    "none", "-", "-", "-", fit(p->cmdline, cmd, sizeof cmd));
     }
-    printf("\n(Priority, memory and resources are kept as metadata; the dispatcher ignores them.)\n\n");
+    printf("\n(Priority, memory and resources are kept as metadata; FCFS ignores them.)\n\n");
     fflush(stdout);
 }
 
@@ -1377,7 +1121,7 @@ static void describe_result(const JobRecord *r, char *buf, size_t sz)
 
 static void print_summary(const Dispatcher *d)
 {
-    char cmd[29], budget[24], pid[24], start[24], finish[24], wait[24], turn[24], secs[32], result[64];
+    char cmd[29], budget[8], pid[8], start[8], finish[8], wait[8], turn[8], secs[10], result[64];
     long total_wait = 0, total_turn = 0;
     int started = 0;
 
@@ -1393,15 +1137,10 @@ static void print_summary(const Dispatcher *d)
             snprintf(pid, sizeof pid, r->pid > 0 ? "%d" : "-", (int)r->pid);
             snprintf(start, sizeof start, "%ld", r->start);
             snprintf(finish, sizeof finish, "%ld", r->finish);
-            /* FCFS: waiting time = start - arrival. RR: a job also waits in
-             * the RR queue between slices, so waiting = turnaround - CPU ticks. */
-            long w = d->rr ? (r->finish - r->arrival) - r->run_ticks : r->start - r->arrival;
-            if (w < 0)
-                w = 0;
-            snprintf(wait, sizeof wait, "%ld", w);
+            snprintf(wait, sizeof wait, "%ld", r->start - r->arrival);
             snprintf(turn, sizeof turn, "%ld", r->finish - r->arrival);
             snprintf(secs, sizeof secs, "%.2f", r->elapsed);
-            total_wait += w;
+            total_wait += r->start - r->arrival;
             total_turn += r->finish - r->arrival;
             started++;
         } else {
@@ -1422,13 +1161,6 @@ static void print_summary(const Dispatcher *d)
                started, d->njobs, (double)total_wait / started, (double)total_turn / started);
     printf("Dispatcher ran for %ld tick(s) (%.2f s real time), CPU idle for %ld tick(s).\n",
            d->clock, ts_diff_sec(d->t0, mono_now()), d->idle_ticks);
-    if (d->rr) {
-        int susp = 0;
-        for (int i = 0; i < d->njobs; i++)
-            susp += d->records[i].suspensions;
-        printf("Round-Robin: %d suspension(s) with SIGTSTP; WAIT = turnaround - ticks on the CPU.\n", susp);
-    }
-    print_gantt(d);
     fflush(stdout);
 }
 
@@ -1463,45 +1195,42 @@ static int install_signal_handlers(void)
  */
 static void add_own_dir_to_path(const char *argv0)
 {
-    char *exe = NULL;
-#ifdef __linux__
-    exe = realpath("/proc/self/exe", NULL); /* works however we were started */
-#endif
-    if (!exe && strchr(argv0, '/'))
-        exe = realpath(argv0, NULL);
-    if (!exe)
+    const char *slash = strrchr(argv0, '/');
+    if (!slash)
         return; /* started through PATH: its directory is already searchable */
 
-    char *slash = strrchr(exe, '/');
-    if (slash == exe)
-        slash[1] = '\0'; /* the dispatcher is in "/" */
-    else if (slash)
-        *slash = '\0';
+    size_t dlen = slash == argv0 ? 1 : (size_t)(slash - argv0);
+    char *dir = malloc(dlen + 1);
+    if (!dir)
+        return;
+    memcpy(dir, argv0, dlen);
+    dir[dlen] = '\0';
+    char *abs = realpath(dir, NULL);
+    free(dir);
+    if (!abs)
+        return;
 
     const char *old = getenv("PATH");
     if (!old || !*old)
         old = "/usr/local/bin:/usr/bin:/bin";
-    size_t n = strlen(exe) + 1 + strlen(old) + 1;
+    size_t n = strlen(abs) + 1 + strlen(old) + 1;
     char *path = malloc(n);
     if (path) {
-        snprintf(path, n, "%s:%s", exe, old);
+        snprintf(path, n, "%s:%s", abs, old);
         setenv("PATH", path, 1);
         free(path);
     }
-    free(exe);
+    free(abs);
 }
 
 static void print_usage(FILE *out)
 {
     fprintf(out,
-            "Usage: %s [--fcfs] <dispatch-file>                 First-Come, First-Served (default)\n"
-            "       %s --rr [--quantum N] <dispatch-file>       Round-Robin, time quantum N ticks (default 1)\n"
+            "Usage: %s <dispatch-file>\n"
             "       %s --help | --version\n"
             "\n"
-            "Runs the jobs in <dispatch-file> using a 1-second dispatcher tick. FCFS runs\n"
-            "one job at a time to completion. Round-Robin gives each job a time slice;\n"
-            "when it is used up and another job is waiting, the job is suspended with\n"
-            "SIGTSTP (SIGSTOP if ignored), queued again, and later resumed with SIGCONT.\n"
+            "Runs the jobs in <dispatch-file> one at a time in First-Come, First-Served\n"
+            "order, using a 1-second dispatcher tick.\n"
             "\n"
             "Dispatch-file lines (blank lines and lines starting with # are ignored):\n"
             "  <arrival>,<command and arguments>\n"
@@ -1515,9 +1244,8 @@ static void print_usage(FILE *out)
             "grouped with quotes. Programs built next to the dispatcher (sleepy,\n"
             "test_worker) can be named without a path.\n"
             "\n"
-            "Examples:  %s tests/jobs_sheet_processlist.txt\n"
-            "           %s --rr tests/jobs_rr_stallings.txt\n",
-            PROGRAM_NAME, PROGRAM_NAME, PROGRAM_NAME, KILL_GRACE_MS, PROGRAM_NAME, PROGRAM_NAME);
+            "Example:  %s tests/jobs_basic.txt\n",
+            PROGRAM_NAME, PROGRAM_NAME, KILL_GRACE_MS, PROGRAM_NAME);
 }
 
 int main(int argc, char *argv[])
@@ -1527,62 +1255,31 @@ int main(int argc, char *argv[])
 
     setvbuf(stdout, NULL, _IOLBF, 0); /* line-buffered, even when piped to a file */
 
-    memset(&d, 0, sizeof d);
-    queue_init(&d.queue);
-    queue_init(&d.rrqueue);
-    d.quantum = 1;
-
-    const char *file = NULL;
-    bool quantum_given = false;
-    for (int i = 1; i < argc; i++) {
-        const char *a = argv[i];
-        if (strcmp(a, "--help") == 0 || strcmp(a, "-h") == 0) {
-            print_usage(stdout);
-            return EXIT_OK;
-        } else if (strcmp(a, "--version") == 0 || strcmp(a, "-V") == 0) {
-            printf("%s %s (FCFS and Round-Robin dispatchers)\n", PROGRAM_NAME, PROGRAM_VERSION);
-            return EXIT_OK;
-        } else if (strcmp(a, "--rr") == 0) {
-            d.rr = true;
-        } else if (strcmp(a, "--fcfs") == 0) {
-            d.rr = false;
-        } else if (strcmp(a, "--quantum") == 0 || strcmp(a, "-q") == 0) {
-            int q;
-            if (i + 1 >= argc || !parse_int(argv[i + 1], &q) || q < 1 || q > 3600) {
-                fprintf(stderr, "error: %s needs a whole number of ticks from 1 to 3600.\n\n", a);
-                print_usage(stderr);
-                return EXIT_USAGE;
-            }
-            d.quantum = q;
-            quantum_given = true;
-            i++;
-        } else if (a[0] == '-' && a[1] != '\0') {
-            fprintf(stderr, "error: unknown option '%s'.\n\n", a);
-            print_usage(stderr);
-            return EXIT_USAGE;
-        } else if (file) {
-            fprintf(stderr, "error: expected exactly one dispatch file.\n\n");
-            print_usage(stderr);
-            return EXIT_USAGE;
-        } else {
-            file = a;
-        }
+    if (argc == 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
+        print_usage(stdout);
+        return EXIT_OK;
     }
-    if (!file) {
+    if (argc == 2 && (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-V") == 0)) {
+        printf("%s %s (FCFS dispatcher)\n", PROGRAM_NAME, PROGRAM_VERSION);
+        return EXIT_OK;
+    }
+    if (argc != 2) {
         fprintf(stderr, "error: expected exactly one dispatch file.\n\n");
         print_usage(stderr);
         return EXIT_USAGE;
     }
-    if (quantum_given && !d.rr) {
-        fprintf(stderr, "error: --quantum only applies to Round-Robin; add --rr.\n\n");
+    if (argv[1][0] == '-' && argv[1][1] != '\0') {
+        fprintf(stderr, "error: unknown option '%s'.\n\n", argv[1]);
         print_usage(stderr);
         return EXIT_USAGE;
     }
 
+    memset(&d, 0, sizeof d);
+    queue_init(&d.queue);
     add_own_dir_to_path(argv[0]);
 
-    print_banner(&d);
-    rc = load_dispatch_file(file, &d.queue);
+    print_banner();
+    rc = load_dispatch_file(argv[1], &d.queue);
     if (rc != EXIT_OK)
         return rc;
 
@@ -1600,15 +1297,13 @@ int main(int argc, char *argv[])
         return EXIT_SYSTEM;
     }
 
-    print_job_table(&d.queue, file);
+    print_job_table(&d.queue, argv[1]);
     rc = run_dispatcher(&d);
     print_summary(&d);
 
     for (int i = 0; i < d.njobs; i++)
         free(d.records[i].command);
     free(d.records);
-    free(d.timeline);
-    queue_free(&d.queue);   /* already empty; kept for safety */
-    queue_free(&d.rrqueue);
+    queue_free(&d.queue); /* already empty; kept for safety */
     return rc;
 }
