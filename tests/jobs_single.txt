@@ -1,0 +1,2 @@
+# Test 1: one job arriving at time zero. Exits by itself after 2 s (budget 5).
+0,0,5,64,0,0,0,0,./build/test_worker 2 --name solo

@@ -1,0 +1,6 @@
+# Tests 3 and 4: jobs arriving at different times, with idle CPU.
+# Nothing arrives until T=2 (idle), B arrives while A is still running (it waits),
+# and C arrives at T=9 after a second idle gap.
+2,0,5,64,0,0,0,0,./build/test_worker 2 --name A
+3,0,5,64,0,0,0,0,./build/test_worker 1 --name B
+9,0,5,64,0,0,0,0,./build/test_worker 1 --name C

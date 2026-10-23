@@ -1,0 +1,7 @@
+# Viva demo: CPU-time budget vs. real CPU use.
+# Both jobs get the same 3-tick budget and both run for 2 seconds of wall-clock time.
+# Job 1 sleeps (uses almost no CPU); Job 2 spins (uses ~2 s of CPU).
+# The dispatcher treats them identically, because its "CPU-time budget" is
+# counted in elapsed dispatcher ticks, not in CPU seconds actually consumed.
+0,0,3,64,0,0,0,0,./build/test_worker 2 --name sleeper
+0,0,3,64,0,0,0,0,./build/test_worker 2 --busy --name spinner

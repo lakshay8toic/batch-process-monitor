@@ -1,0 +1,5 @@
+# Tests 2 and 15: several jobs arrive at time zero.
+# FCFS must run them in file order: A, then B, then C.
+0,0,4,64,0,0,0,0,./build/test_worker 1 --name A
+0,0,4,64,0,0,0,0,./build/test_worker 1 --name B
+0,0,4,64,0,0,0,0,./build/test_worker 1 --name C

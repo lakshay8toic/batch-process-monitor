@@ -1,0 +1,4 @@
+# Test 5: jobs that exit naturally before their budget expires.
+# The quotes show how a command argument containing spaces is written.
+0,0,6,64,0,0,0,0,./build/test_worker 2 --name "early bird"
+0,0,4,64,0,0,0,0,sleep 1

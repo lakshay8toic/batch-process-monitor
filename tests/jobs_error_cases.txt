@@ -1,0 +1,9 @@
+# Tests 7 and 11 (+ abnormal termination): runtime errors the dispatcher must survive.
+# Job 1: the executable does not exist (path).   Job 2: not found on PATH.
+# Job 3: exits with status 3.                    Job 4: a normal job still runs.
+# Job 5: crashes with SIGABRT (abnormal termination is detected and reported).
+0,0,3,64,0,0,0,0,./build/no_such_program --flag
+0,0,3,64,0,0,0,0,definitely_not_a_real_command_25
+0,0,3,64,0,0,0,0,./build/test_worker 1 --exit 3 --name failing
+1,0,3,64,0,0,0,0,./build/test_worker 1 --name survivor
+2,0,3,64,0,0,0,0,./build/test_worker 1 --abort --name crasher

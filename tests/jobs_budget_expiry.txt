@@ -1,0 +1,5 @@
+# Tests 6 and 13: budgets that expire.
+# Job 1 runs 30 s with a 3-tick budget: stopped with SIGINT at T=3.
+# Job 2 ignores SIGINT: the dispatcher waits 500 ms, then uses SIGKILL.
+0,0,3,64,0,0,0,0,./build/test_worker 30 --name stubborn-no
+0,0,2,64,0,0,0,0,./build/test_worker 30 --ignore-sigint --name stubborn-yes

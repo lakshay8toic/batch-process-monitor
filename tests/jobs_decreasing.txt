@@ -1,0 +1,4 @@
+# Test 14: arrival times out of order (5 then 3). Must be rejected.
+0,sleep 1
+5,sleep 1
+3,sleep 1

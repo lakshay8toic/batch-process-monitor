@@ -1,0 +1,11 @@
+# Test 8: malformed records. Every bad line is reported with its line number
+# and no job is started.
+0,0,3,64,0,0,0,0,sleep 1
+abc,sleep 1
+-1,sleep 1
+1,0,0,64,0,0,0,0,sleep 1
+1,0,3,64,0,0,0,0
+1,0,3,64,0,0,sleep 1
+1,0,x,64,0,0,0,0,sleep 1
+2,echo 'unterminated
+3

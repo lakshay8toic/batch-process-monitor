@@ -1,0 +1,4 @@
+# Test 12: press Ctrl+C while this runs. The running child must be stopped
+# and reaped, and Job 2 must be reported as "not started".
+0,0,30,64,0,0,0,0,./build/test_worker 20 --name long
+1,0,30,64,0,0,0,0,./build/test_worker 20 --name never

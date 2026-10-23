@@ -1,0 +1,14 @@
+# jobs_basic.txt - the specification's example in the full 8-field format,
+# with the matching command appended to each line.
+# Format: <arrival>,<priority>,<CPU time>,<memory>,<res1>,<res2>,<res3>,<res4>,<command>
+# Each job's CPU-time budget equals its sleep time. The dispatcher's budget
+# check reaches the tick a few milliseconds before sleep would exit, so each
+# job is normally ended by SIGINT exactly at its budget. (If the kernel lets
+# sleep finish first, the job is reported as "completed" instead; the
+# schedule is identical either way.) Finish times: 3, 9, 13, 18, 20 - the
+# textbook FCFS Gantt chart.
+0,0,3,64,0,0,0,0,sleep 3
+2,0,6,64,0,0,0,0,sleep 6
+4,0,4,64,0,0,0,0,sleep 4
+6,0,5,64,0,0,0,0,sleep 5
+8,0,2,64,0,0,0,0,sleep 2

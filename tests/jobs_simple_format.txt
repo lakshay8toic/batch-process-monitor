@@ -1,0 +1,8 @@
+# jobs_simple_format.txt - the example from the specification, simple format.
+# Format: <arrival time>,<command and arguments>
+# The simple format has no CPU-time budget, so each job runs until it exits.
+0,sleep 3
+2,sleep 6
+4,sleep 4
+6,sleep 5
+8,sleep 2
