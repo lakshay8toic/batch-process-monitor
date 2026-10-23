@@ -1075,6 +1075,11 @@ static void wait_for_tick(Dispatcher *d)
         nanosleep(&slice, NULL); /* EINTR is fine: the loop re-checks the flag */
         if (g_stop_signal)
             break;
+        /* If we woke up after the deadline, the tick is over: a child that
+         * exited just now belongs to the NEXT tick, so leave it for the main
+         * loop to reap after the clock has been incremented. */
+        if (ts_cmp(mono_now(), d->next_tick) >= 0)
+            break;
         if (d->current && poll_current(d)) {
             /* Child finished between ticks: hand the CPU to the next job now. */
             dispatch(d);
