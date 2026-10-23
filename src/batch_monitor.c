@@ -3,6 +3,12 @@
  *
  * Operating Systems end-semester project (ID 25).
  *
+ * Team:
+ *   AP24110010677  Lakshay (Team Leader)
+ *   AP24110011219  Md Ahab Firoz
+ *   AP24110010386  Akshita Modi
+ *   AP24110011380  N. Shanmuka Abhiram
+ *
  * The dispatcher reads a list of jobs from a "dispatch file", keeps them in a
  * linked-list queue of Process Control Blocks (PCBs), and runs them one at a
  * time in First-Come, First-Served order using fork(), execvp() and waitpid().

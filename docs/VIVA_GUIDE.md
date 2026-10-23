@@ -4,6 +4,26 @@ This guide gives short, honest answers that match the code in `src/batch_monitor
 
 ---
 
+## Team
+
+| Roll number | Name | Role |
+|---|---|---|
+| AP24110010677 | **Lakshay** | **Team Leader** |
+| AP24110011219 | Md Ahab Firoz | Member |
+| AP24110010386 | Akshita Modi | Member |
+| AP24110011380 | N. Shanmuka Abhiram | Member |
+
+**Who answers what in the viva.** Each member should be ready to explain their own part in depth, and everyone should know the overall flow (Part A, Q1–Q2, and the demo in Part C).
+
+| Member | Be ready to explain | Viva questions (Part A) |
+|---|---|---|
+| **Lakshay** (Team Leader) | Overall architecture, the FCFS main loop, `fork()`/`execvp()`, budget expiry, SIGINT/SIGKILL, Ctrl+C handling. Also leads the live demo. | Q1, Q2, Q7, Q8, Q9, Q12, Q15, Q17, Q19, Q22 |
+| **Md Ahab Firoz** | The dispatch-file formats, how a line is parsed and validated, and how commands are split into arguments. | Q5, Q16, Q18, Q20 |
+| **Akshita Modi** | The PCB, the linked-list queue, `waitpid()`, reaping, zombies, and the summary metrics (waiting and turnaround time). | Q3, Q4, Q6, Q10, Q11, Q13, Q14 |
+| **N. Shanmuka Abhiram** | The test worker, the automated tests, the Makefile, valgrind, and CPU-time budget vs. real CPU use. | Q21, plus "how did you test it?" |
+
+---
+
 ## Part A: The 22 viva questions
 
 **1. What is a Batch Process Monitor?**

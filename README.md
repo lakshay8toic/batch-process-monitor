@@ -6,6 +6,27 @@ A Linux **batch process monitor** that reads a list of jobs from a *dispatch fil
 
 ---
 
+## Team
+
+| Roll number | Name | Role |
+|---|---|---|
+| AP24110010677 | **Lakshay** | **Team Leader** |
+| AP24110011219 | Md Ahab Firoz | Member |
+| AP24110010386 | Akshita Modi | Member |
+| AP24110011380 | N. Shanmuka Abhiram | Member |
+
+### Who did what
+
+| Member | Contribution | Main code / files |
+|---|---|---|
+| **Lakshay** (Team Leader) | Planned the project and the overall architecture, split the work, and built the dispatcher core: the FCFS main loop, launching jobs with `fork()` + `execvp()`, the budget countdown with SIGINT → SIGKILL termination, and safe Ctrl+C handling. Integrated everyone's parts, reviewed the code and set up the GitHub repository. | `run_dispatcher()`, `dispatch_next()`, `wait_for_tick()`, `launch_job()`, `terminate_current()`, `shut_down()`, signal handlers |
+| **Md Ahab Firoz** | Built the dispatch-file parser: support for both input formats, splitting commands into arguments (including quotes), validating every field, and line-numbered error messages, plus the check that arrival times never decrease. | `load_dispatch_file()`, `parse_line()`, `tokenize_command()`, `parse_int()`, `trim()` |
+| **Akshita Modi** | Designed the Process Control Block and the linked-list ready queue, and wrote the process-reaping and status code (`waitpid()`, exit status vs. signal) along with the final summary table and the waiting/turnaround-time metrics. | `struct pcb`, `enqueue()`, `dequeue()`, `poll_current()`, `finish_current()`, `retire_job()`, `print_summary()` |
+| **N. Shanmuka Abhiram** | Owned testing and the build: wrote the `test_worker` helper program, all the test dispatch files and the automated test suite, wrote the Makefile, and ran the valgrind memory checks. | `tests/test_worker.c`, `tests/run_tests.sh`, `tests/jobs_*.txt`, `Makefile` |
+| **Everyone** | Wrote the documentation (this README and the viva guide) and tested on Linux before submission. | `README.md`, `docs/VIVA_GUIDE.md` |
+
+---
+
 ## 1. Academic objective
 
 The project shows how an operating system's **dispatcher** manages processes:
