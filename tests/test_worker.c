@@ -1,12 +1,13 @@
 /*
  * test_worker.c - a safe, predictable job for testing the Batch Process Monitor.
  *
- * Usage: test_worker <seconds> [--exit CODE] [--ignore-sigint] [--abort]
- *                              [--busy] [--name LABEL]
+ * Usage: test_worker <seconds> [--exit CODE] [--ignore-sigint] [--ignore-sigtstp]
+ *                              [--abort] [--busy] [--name LABEL]
  *
  *   <seconds>        how long to run (0-3600), printing progress once a second
  *   --exit CODE      exit with this status (0-255) when finished (default 0)
  *   --ignore-sigint  ignore SIGINT, to test the dispatcher's SIGKILL fallback
+ *   --ignore-sigtstp ignore SIGTSTP, to test the Round-Robin SIGSTOP fallback
  *   --abort          end abnormally with SIGABRT instead of exiting
  *                    (core dumps are disabled first, so no core file is written)
  *   --busy           burn CPU in a loop instead of sleeping, to show the
@@ -44,7 +45,7 @@ static int parse_range(const char *s, int lo, int hi, int *out)
 static void usage(void)
 {
     fprintf(stderr, "Usage: test_worker <seconds> [--exit CODE] [--ignore-sigint] "
-                    "[--abort] [--busy] [--name LABEL]\n");
+                    "[--ignore-sigtstp] [--abort] [--busy] [--name LABEL]\n");
 }
 
 static double now_sec(void)
@@ -71,7 +72,7 @@ static void one_second(int busy)
 
 int main(int argc, char *argv[])
 {
-    int seconds, code = 0, ignore = 0, do_abort = 0, busy = 0;
+    int seconds, code = 0, ignore = 0, ignore_tstp = 0, do_abort = 0, busy = 0;
     const char *name = "worker";
 
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -88,6 +89,8 @@ int main(int argc, char *argv[])
             }
         } else if (strcmp(argv[i], "--ignore-sigint") == 0) {
             ignore = 1;
+        } else if (strcmp(argv[i], "--ignore-sigtstp") == 0) {
+            ignore_tstp = 1;
         } else if (strcmp(argv[i], "--abort") == 0) {
             do_abort = 1;
         } else if (strcmp(argv[i], "--busy") == 0) {
@@ -100,17 +103,22 @@ int main(int argc, char *argv[])
         }
     }
 
-    if (ignore) {
+    if (ignore || ignore_tstp) {
         struct sigaction sa;
         memset(&sa, 0, sizeof sa);
         sa.sa_handler = SIG_IGN;
         sigemptyset(&sa.sa_mask);
-        sigaction(SIGINT, &sa, NULL);
+        if (ignore)
+            sigaction(SIGINT, &sa, NULL);
+        if (ignore_tstp)
+            sigaction(SIGTSTP, &sa, NULL);
     }
 
     printf("    [%s pid=%d] started: will run %d s (%s), then %s%s\n", name, (int)getpid(),
            seconds, busy ? "busy CPU loop" : "sleeping",
            do_abort ? "abort with SIGABRT" : "exit", ignore ? " (ignoring SIGINT)" : "");
+    if (ignore_tstp)
+        printf("    [%s pid=%d] ignoring SIGTSTP\n", name, (int)getpid());
     for (int t = 1; t <= seconds; t++) {
         one_second(busy);
         printf("    [%s pid=%d] progress %d/%d s\n", name, (int)getpid(), t, seconds);

@@ -3,7 +3,7 @@
 #
 # Usage (from the repository root):   make test
 #                               or:   bash tests/run_tests.sh
-#   QUICK=1 make test   skips the four 20-second specification examples.
+#   QUICK=1 make test   skips the five 20-second specification examples.
 #
 # Each test runs the real dispatcher with real child processes and checks the
 # exit code and the output. After every test it also checks that no test_worker
@@ -82,13 +82,16 @@ echo "========================================"
 
 # ---------------------------------------------------------------- CLI ----
 begin "CLI: --help prints usage, exit 0"
-run cli_help 0 --help; expect "Usage: batch_monitor <dispatch-file>"; end
+run cli_help 0 --help; expect "Usage: batch_monitor [--fcfs] <dispatch-file>"; end
 begin "CLI: --version, exit 0"
-run cli_version 0 --version; expect "batch_monitor 1.0.0"; end
+run cli_version 0 --version; expect "batch_monitor 1.1.0"; end
 begin "CLI: no arguments -> usage error, exit 1"
 run cli_noargs 1; expect "expected exactly one dispatch file"; end
 begin "CLI: unknown option -> usage error, exit 1"
 run cli_badopt 1 --bogus; expect "unknown option '--bogus'"; end
+begin "CLI: --quantum without --rr, and --quantum 0 -> exit 1"
+run cli_q_norr 1 --quantum 2 tests/jobs_single.txt; expect "--quantum only applies to Round-Robin"
+run cli_q_zero 1 --rr --quantum 0 tests/jobs_single.txt; expect "needs a whole number of ticks"; end
 begin "CLI: two files -> usage error, exit 1"
 run cli_twofiles 1 tests/jobs_single.txt tests/jobs_single.txt; end
 
@@ -128,7 +131,10 @@ timeout 90 "$BM" tests/jobs_error_cases.txt >"$LOG" 2>&1 &
 BG=$!
 sleep 1.5
 # While it runs, the dispatcher must have no zombie children.
-if ps -o stat= --ppid "$BG" 2>/dev/null | grep -q Z; then bad "zombie child found while running"; fi
+DPID=$(pgrep -P "$BG" -x batch_monitor)   # $BG is `timeout`; the dispatcher is its child
+[[ -n $DPID ]] || bad "could not find the dispatcher process"
+ps -o stat= --ppid "${DPID:-0}" >/dev/null 2>&1 || true
+if ps -o stat= --ppid "${DPID:-0}" 2>/dev/null | grep -q Z; then bad "zombie child found while running"; fi
 wait "$BG"; RC=$?
 [[ $RC -eq 0 ]] || bad "exit code $RC, expected 0"
 expect "could not execute './build/no_such_program': No such file or directory"
@@ -226,8 +232,66 @@ wait "$BG"; RC=$?
 [[ $RC -eq 143 ]] || bad "exit code $RC, expected 143"
 expect "Received SIGTERM"; end
 
+# -------------------------------------------------------- round-robin ----
+# The order in which jobs got the CPU, as "T:job" pairs (Starting/Resuming lines).
+dispatch_seq() {
+    grep -oE '^\[T=[0-9]+\] (Starting|Resuming) Job [0-9]+' "$LOG" |
+        sed -E 's/^\[T=([0-9]+)\] [A-Za-z]+ Job ([0-9]+)/\1:\2/' | tr '\n' ' ' | sed 's/ $//'
+}
+expect_seq() {
+    local got; got=$(dispatch_seq)
+    [[ $got == "$1" ]] || bad "dispatch order '$got', expected '$1'"
+}
+
+begin "RR: two jobs alternate every tick (q=1), SIGTSTP really stops"
+printf '0, 0, 3, 64, 0, 0, 0, 0\n0, 0, 3, 64, 0, 0, 0, 0\n' >"$TMPDIR_T/rr2.txt"
+LOG="$LOGDIR/rr_two.log"
+timeout 90 "$BM" --rr "$TMPDIR_T/rr2.txt" >"$LOG" 2>&1 &
+BG=$!
+sleep 1.6
+# One child must be in state T (stopped by SIGTSTP) while the other runs.
+DPID=$(pgrep -P "$BG" -x batch_monitor)   # $BG is `timeout`; the dispatcher is its child
+[[ -n $DPID ]] || bad "could not find the dispatcher process"
+ps -o stat= --ppid "${DPID:-0}" 2>/dev/null | grep -q 'T' || bad "no child in stopped (T) state while suspended"
+wait "$BG"; RC=$?
+[[ $RC -eq 0 ]] || bad "exit code $RC, expected 0"
+expect_seq "0:1 1:2 2:1 3:2 4:1 5:2"
+expect_times 1 0 5; expect_times 2 1 6; expect "sending SIGTSTP"; expect "sending SIGCONT"; end
+
+begin "RR: --quantum 2 gives each job 2 ticks per turn"
+printf '0, 0, 4, 64, 0, 0, 0, 0\n0, 0, 4, 64, 0, 0, 0, 0\n' >"$TMPDIR_T/rrq2.txt"
+run rr_q2 0 --rr --quantum 2 "$TMPDIR_T/rrq2.txt"
+expect "ROUND-ROBIN DISPATCHER (quantum = 2)"
+expect_seq "0:1 2:2 4:1 6:2"; expect_times 1 0 6; expect_times 2 2 8; end
+
+begin "RR: job ignoring SIGTSTP is stopped with SIGSTOP"
+printf '0,0,2,64,0,0,0,0,test_worker 30 --ignore-sigtstp --name tstp\n0, 0, 2, 64, 0, 0, 0, 0\n' >"$TMPDIR_T/rrstop.txt"
+run rr_sigstop 0 --rr "$TMPDIR_T/rrstop.txt"
+expect "did not stop within 500 ms of SIGTSTP; sending SIGSTOP (cannot be ignored)"
+expect_result 1 "budget expired: SIGINT"; expect_result 2 "budget expired: SIGINT"; end
+
+begin "RR: Ctrl+C also stops and reaps the suspended job (exit 130)"
+printf '0, 0, 30, 64, 0, 0, 0, 0\n0, 0, 30, 64, 0, 0, 0, 0\n1, 0, 30, 64, 0, 0, 0, 0\n' >"$TMPDIR_T/rrint.txt"
+LOG="$LOGDIR/rr_interrupt.log"
+timeout 90 "$BM" --rr "$TMPDIR_T/rrint.txt" >"$LOG" 2>&1 &
+BG=$!
+sleep 2.5
+kill -INT "$BG"
+wait "$BG"; RC=$?
+[[ $RC -eq 130 ]] || bad "exit code $RC, expected 130"
+expect "is suspended; stopping it as well"
+expect_result 1 "interrupted (Ctrl+C)"; expect_result 2 "interrupted (Ctrl+C)"; expect_result 3 "interrupted (Ctrl+C)"; end
+
 # ------------------------------------------------ specification examples ----
 if [[ ${QUICK:-0} != 1 ]]; then
+    begin "RR: sheet's job list = Stallings Fig 9.5 (RR, q=1) (20 s)"
+    run rr_stallings 0 --rr tests/jobs_rr_stallings.txt
+    expect_seq "0:1 2:2 3:1 4:2 5:3 6:2 7:4 8:3 9:2 10:5 11:4 12:3 13:2 14:5 15:4 16:3 17:2 18:4"
+    expect_times 1 0 4; expect_times 2 2 18; expect_times 3 5 17; expect_times 4 7 20; expect_times 5 10 15
+    expect "Average waiting time: 6.80 ticks.  Average turnaround: 10.80 ticks."
+    expect "A (Job 1)   ## #"
+    expect "D (Job 4)          #   #   #  ##"; end
+
     begin "Project sheet process list, exactly as given (20 s)"
     run sheet_processlist 0 tests/jobs_sheet_processlist.txt
     expect_times 1 0 3; expect_times 2 3 9; expect_times 3 9 13
@@ -252,7 +316,7 @@ if [[ ${QUICK:-0} != 1 ]]; then
     expect_times 1 0 3; expect_times 2 3 9; expect_times 3 9 13
     expect_times 4 13 18; expect_times 5 18 20; end
 else
-    echo "(QUICK=1: skipped the four 20-second specification examples)"
+    echo "(QUICK=1: skipped the five 20-second specification examples)"
 fi
 
 echo "========================================"
