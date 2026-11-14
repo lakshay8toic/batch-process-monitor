@@ -1,0 +1,112 @@
+=============================================
+        BATCH PROCESS MONITOR
+        FCFS PROCESS DISPATCHER
+=============================================
+
+Loaded 5 job(s) from RUN/INPUTS/input_sheet.txt.
+
+JOB  ARRIVAL  BUDGET  COMMAND
+---  -------  ------  ----------------------------
+  1        0       3  sleepy
+  2        2       6  sleepy
+  3        4       4  sleepy
+  4        6       5  sleepy
+  5        8       2  sleepy
+
+[T=0] Dispatcher clock initialized to 0.
+[T=0] Job 1 arrived (sleepy).
+[T=0] Job 1 is eligible (arrived at T=0). Launching FCFS.
+[T=0] Starting Job 1: sleepy
+[T=0] Child launched with PID 35275. CPU-time budget: 3 tick(s).
+    [sleepy pid=35275] started: running until stopped
+    [sleepy pid=35275] tick 1
+    [sleepy pid=35275] tick 2
+    [sleepy pid=35275] tick 3
+[T=0] PID 35275 running. Remaining budget: 3 tick(s).
+[T=1] PID 35275 running. Remaining budget: 2 tick(s).
+[T=2] Job 2 arrived (sleepy).
+[T=2] PID 35275 running. Remaining budget: 1 tick(s).
+[T=3] CPU-time budget expired for PID 35275.
+[T=3] Sending signal 2 to PID 35275 (budget expired).
+[T=3] Child reaped: PID 35275 killed by signal 2.
+[T=3] Job 2 is eligible (arrived at T=2). Launching FCFS.
+[T=3] Starting Job 2: sleepy
+[T=3] Child launched with PID 35283. CPU-time budget: 6 tick(s).
+    [sleepy pid=35283] started: running until stopped
+    [sleepy pid=35283] tick 1
+    [sleepy pid=35283] tick 2
+    [sleepy pid=35283] tick 3
+    [sleepy pid=35283] tick 4
+    [sleepy pid=35283] tick 5
+    [sleepy pid=35283] tick 6
+[T=3] PID 35283 running. Remaining budget: 6 tick(s).
+[T=4] Job 3 arrived (sleepy).
+[T=4] PID 35283 running. Remaining budget: 5 tick(s).
+[T=5] PID 35283 running. Remaining budget: 4 tick(s).
+[T=6] Job 4 arrived (sleepy).
+[T=6] PID 35283 running. Remaining budget: 3 tick(s).
+[T=7] PID 35283 running. Remaining budget: 2 tick(s).
+[T=8] Job 5 arrived (sleepy).
+[T=8] PID 35283 running. Remaining budget: 1 tick(s).
+[T=9] CPU-time budget expired for PID 35283.
+[T=9] Sending signal 2 to PID 35283 (budget expired).
+[T=9] Child reaped: PID 35283 killed by signal 2.
+[T=9] Job 3 is eligible (arrived at T=4). Launching FCFS.
+[T=9] Starting Job 3: sleepy
+[T=9] Child launched with PID 35372. CPU-time budget: 4 tick(s).
+    [sleepy pid=35372] started: running until stopped
+    [sleepy pid=35372] tick 1
+    [sleepy pid=35372] tick 2
+    [sleepy pid=35372] tick 3
+    [sleepy pid=35372] tick 4
+[T=9] PID 35372 running. Remaining budget: 4 tick(s).
+[T=10] PID 35372 running. Remaining budget: 3 tick(s).
+[T=11] PID 35372 running. Remaining budget: 2 tick(s).
+[T=12] PID 35372 running. Remaining budget: 1 tick(s).
+[T=13] CPU-time budget expired for PID 35372.
+[T=13] Sending signal 2 to PID 35372 (budget expired).
+[T=13] Child reaped: PID 35372 killed by signal 2.
+[T=13] Job 4 is eligible (arrived at T=6). Launching FCFS.
+[T=13] Starting Job 4: sleepy
+[T=13] Child launched with PID 35389. CPU-time budget: 5 tick(s).
+    [sleepy pid=35389] started: running until stopped
+    [sleepy pid=35389] tick 1
+    [sleepy pid=35389] tick 2
+    [sleepy pid=35389] tick 3
+    [sleepy pid=35389] tick 4
+    [sleepy pid=35389] tick 5
+[T=13] PID 35389 running. Remaining budget: 5 tick(s).
+[T=14] PID 35389 running. Remaining budget: 4 tick(s).
+[T=15] PID 35389 running. Remaining budget: 3 tick(s).
+[T=16] PID 35389 running. Remaining budget: 2 tick(s).
+[T=17] PID 35389 running. Remaining budget: 1 tick(s).
+[T=18] CPU-time budget expired for PID 35389.
+[T=18] Sending signal 2 to PID 35389 (budget expired).
+[T=18] Child reaped: PID 35389 killed by signal 2.
+[T=18] Job 5 is eligible (arrived at T=8). Launching FCFS.
+[T=18] Starting Job 5: sleepy
+[T=18] Child launched with PID 35471. CPU-time budget: 2 tick(s).
+    [sleepy pid=35471] started: running until stopped
+    [sleepy pid=35471] tick 1
+    [sleepy pid=35471] tick 2
+[T=18] PID 35471 running. Remaining budget: 2 tick(s).
+[T=19] PID 35471 running. Remaining budget: 1 tick(s).
+[T=20] CPU-time budget expired for PID 35471.
+[T=20] Sending signal 2 to PID 35471 (budget expired).
+[T=20] Child reaped: PID 35471 killed by signal 2.
+[T=20] All jobs finished. Dispatcher exiting.
+
+====================================================================================
+FINAL EXECUTION SUMMARY (Times in Dispatcher Ticks / Seconds)
+====================================================================================
+JOB  PID      COMMAND                  ARRIVE  BUDGET  START  FINISH  WAIT  TURN  RESULT
+---  -------  -----------------------  ------  ------  -----  ------  ----  ----  -----------------------
+  1  35275    sleepy                        0       3      0       3     0     3  budget expired: SIGINT
+  2  35283    sleepy                        2       6      3       9     1     7  budget expired: SIGINT
+  3  35372    sleepy                        4       4      9      13     5     9  budget expired: SIGINT
+  4  35389    sleepy                        6       5     13      18     7    12  budget expired: SIGINT
+  5  35471    sleepy                        8       2     18      20    10    12  budget expired: SIGINT
+
+Total Jobs: 5 | Avg Waiting Time: 4.60 ticks | Avg Turnaround Time: 8.60 ticks
+Total Dispatcher Runtime: 20 tick(s), CPU idle: 0 tick(s).
+

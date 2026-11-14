@@ -1,0 +1,8 @@
+# Project Sheet process list (FCFS 20-second specification demo)
+# Format: <arrival time>,<priority>,<cputime>,<memory alloc>,<res1>,<res2>,<res3>,<res4>
+# All run the default "sleepy" program until their CPU-time budget runs out.
+0, 0, 3, 64, 0, 0, 0, 0
+2, 0, 6, 64, 0, 0, 0, 0
+4, 0, 4, 64, 0, 0, 0, 0
+6, 0, 5, 64, 0, 0, 0, 0
+8, 0, 2, 64, 0, 0, 0, 0

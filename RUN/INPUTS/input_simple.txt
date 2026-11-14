@@ -1,0 +1,5 @@
+# Simple format example: <arrival time>,<command and arguments>
+# Jobs run real Linux/terminal commands until completion.
+0,echo "Starting batch job 1"
+1,sleep 2
+4,echo "Batch process monitor finished all jobs successfully!"

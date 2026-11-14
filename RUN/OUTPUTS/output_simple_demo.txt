@@ -1,0 +1,50 @@
+=============================================
+        BATCH PROCESS MONITOR
+        FCFS PROCESS DISPATCHER
+=============================================
+
+Loaded 3 job(s) from RUN/INPUTS/input_simple.txt.
+
+JOB  ARRIVAL  BUDGET  COMMAND
+---  -------  ------  ----------------------------
+  1        0    none  echo "Starting batch job 1"
+  2        1    none  sleep 2
+  3        4    none  echo "Batch process monitor finished all jobs successfully!"
+
+[T=0] Dispatcher clock initialized to 0.
+[T=0] Job 1 arrived (echo "Starting batch job 1").
+[T=0] Job 1 is eligible (arrived at T=0). Launching FCFS.
+[T=0] Starting Job 1: echo "Starting batch job 1"
+[T=0] Child launched with PID 35181 (no CPU budget: runs until exit).
+Starting batch job 1
+[T=0] PID 35181 running (no budget limit).
+[T=0] Child reaped: PID 35181 exited with status 0.
+[T=1] Job 2 arrived (sleep 2).
+[T=1] Job 2 is eligible (arrived at T=1). Launching FCFS.
+[T=1] Starting Job 2: sleep 2
+[T=1] Child launched with PID 35182 (no CPU budget: runs until exit).
+[T=1] PID 35182 running (no budget limit).
+[T=2] PID 35182 running (no budget limit).
+[T=2] Child reaped: PID 35182 exited with status 0.
+[T=3] CPU idle. Next job (Job 3) arrives at T=4.
+[T=4] Job 3 arrived (echo "Batch process monitor finished all jobs successfully!").
+[T=4] Job 3 is eligible (arrived at T=4). Launching FCFS.
+[T=4] Starting Job 3: echo "Batch process monitor finished all jobs successfully!"
+[T=4] Child launched with PID 35187 (no CPU budget: runs until exit).
+Batch process monitor finished all jobs successfully!
+[T=4] PID 35187 running (no budget limit).
+[T=4] Child reaped: PID 35187 exited with status 0.
+[T=5] All jobs finished. Dispatcher exiting.
+
+====================================================================================
+FINAL EXECUTION SUMMARY (Times in Dispatcher Ticks / Seconds)
+====================================================================================
+JOB  PID      COMMAND                  ARRIVE  BUDGET  START  FINISH  WAIT  TURN  RESULT
+---  -------  -----------------------  ------  ------  -----  ------  ----  ----  -----------------------
+  1  35181    echo "Starting batch jo       0    none      0       0     0     0  completed (exit 0)
+  2  35182    sleep 2                       1    none      1       2     0     1  completed (exit 0)
+  3  35187    echo "Batch process mon       4    none      4       4     0     0  completed (exit 0)
+
+Total Jobs: 3 | Avg Waiting Time: 0.00 ticks | Avg Turnaround Time: 0.33 ticks
+Total Dispatcher Runtime: 5 tick(s), CPU idle: 1 tick(s).
+
