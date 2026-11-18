@@ -6,6 +6,19 @@ A Linux **batch process monitor** that reads a list of jobs from a *dispatch fil
 
 ---
 
+## 🌐 Live Interactive Project Website & Simulator
+
+🚀 **[Click here to open the Live Project Website & Dispatcher Simulator](https://lakshay8toic.github.io/batch-process-monitor/)**
+
+Experience the dispatcher interactively in your browser:
+- Step-by-step FCFS CPU scheduling and ready queue linked-list visualization
+- Live Gantt chart and Process Control Block (PCB) inspector
+- Real-time terminal log stream mirroring the C monitor output
+- Sheet benchmark presets and automatic AWT / ATT performance calculations
+- Or check the [`run-website/`](run-website/) folder in the repository.
+
+---
+
 ## Team
 
 | Roll number | Name | Role |
