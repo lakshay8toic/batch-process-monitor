@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Batch Process Monitor | FCFS Dispatcher Simulator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="logo-area">
+        <div class="logo-badge">⚡ OS ID 25</div>
+        <h1>Batch Process Monitor</h1>
+        <p class="subtitle">Interactive FCFS (First-Come, First-Served) Dispatcher & Process Lifecycle Simulator</p>
+      </div>
+      <div class="header-actions">
+        <a href="https://github.com/lakshay8toic/batch-process-monitor" target="_blank" rel="noopener" class="btn btn-github">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          View on GitHub
+        </a>
+      </div>
+    </header>
+
+    <!-- Top Stats Bar -->
+    <div class="stats-bar">
+      <div class="stat-card">
+        <span class="stat-label">DISPATCHER CLOCK</span>
+        <span class="stat-value" id="clock-display">T = 0s</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">CPU STATUS</span>
+        <span class="stat-value status-idle" id="cpu-status-badge">IDLE</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">CURRENT PROCESS</span>
+        <span class="stat-value" id="active-pid-display">None</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">JOBS COMPLETED</span>
+        <span class="stat-value" id="completed-count">0 / 0</span>
+      </div>
+    </div>
+
+    <!-- Main Workspace Grid -->
+    <div class="main-grid">
+      <!-- Left Column: Input and Configuration -->
+      <section class="card input-section">
+        <div class="card-header">
+          <h2>1. Dispatch Configuration</h2>
+          <div class="presets-group">
+            <label>Presets:</label>
+            <select id="preset-selector" class="select-dropdown">
+              <option value="sheet_demo">Sheet Benchmark (5 Jobs)</option>
+              <option value="quick_demo">Quick 3-Job Demo</option>
+              <option value="simple_demo">Simple Sequence</option>
+              <option value="custom">Custom Input</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="card-body">
+          <p class="hint">Input format: <code>&lt;arrival&gt;, &lt;priority&gt;, &lt;cpu_budget&gt;, [memory], ...</code> or <code>&lt;arrival&gt;, &lt;command&gt;</code></p>
+          <textarea id="dispatch-input" rows="8" spellcheck="false"></textarea>
+          
+          <div class="controls-toolbar">
+            <button id="btn-load" class="btn btn-primary">
+              <span>⚡ Load Jobs</span>
+            </button>
+            <button id="btn-run" class="btn btn-success" disabled>
+              <span>▶ Run</span>
+            </button>
+            <button id="btn-step" class="btn btn-secondary" disabled>
+              <span>⏭ Step (1s)</span>
+            </button>
+            <button id="btn-pause" class="btn btn-warning" disabled>
+              <span>⏸ Pause</span>
+            </button>
+            <button id="btn-reset" class="btn btn-danger">
+              <span>↺ Reset</span>
+            </button>
+          </div>
+
+          <div class="speed-slider-row">
+            <label for="speed-range">Simulation Speed: <span id="speed-val">1.0x</span></label>
+            <input type="range" id="speed-range" min="0.2" max="3" step="0.2" value="1">
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Column: Live CPU & PCB Execution Panel -->
+      <section class="card execution-section">
+        <div class="card-header">
+          <h2>2. CPU Core & Active Process Control Block (PCB)</h2>
+          <span class="live-pill" id="live-indicator">DISPATCHER ACTIVE</span>
+        </div>
+
+        <div class="card-body">
+          <div class="cpu-stage" id="cpu-stage-box">
+            <div class="cpu-core-visual">
+              <div class="core-icon">🖥️</div>
+              <div class="core-meta">
+                <h3 id="current-job-title">CPU Idle</h3>
+                <p id="current-job-desc">Ready for next arrived job in queue...</p>
+                <div class="progress-bar-container" id="budget-progress-container" style="display: none;">
+                  <div class="progress-bar" id="budget-progress-bar" style="width: 100%;"></div>
+                </div>
+              </div>
+            </div>
+            
+            <div class="pcb-specs-grid" id="pcb-specs">
+              <div class="spec-item"><span class="k">PID</span><span class="v" id="pcb-pid">-</span></div>
+              <div class="spec-item"><span class="k">Command</span><span class="v" id="pcb-cmd">-</span></div>
+              <div class="spec-item"><span class="k">Arrival Time</span><span class="v" id="pcb-arrival">-</span></div>
+              <div class="spec-item"><span class="k">Remaining CPU</span><span class="v" id="pcb-rem-cpu">-</span></div>
+              <div class="spec-item"><span class="k">Priority</span><span class="v" id="pcb-prio">-</span></div>
+              <div class="spec-item"><span class="k">Memory (MB)</span><span class="v" id="pcb-mem">-</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Ready Queue & Gantt Chart -->
+    <div class="visualization-grid">
+      <!-- Ready Queue -->
+      <section class="card queue-section">
+        <div class="card-header">
+          <h2>3. FCFS Ready Queue (Linked-List Head → Tail)</h2>
+          <span class="count-badge" id="queue-count">0 waiting</span>
+        </div>
+        <div class="card-body">
+          <div class="queue-display-list" id="ready-queue-items">
+            <div class="empty-state">Queue is currently empty.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Execution Timeline / Gantt Chart -->
+      <section class="card gantt-section">
+        <div class="card-header">
+          <h2>4. CPU Execution Timeline (Gantt Chart)</h2>
+        </div>
+        <div class="card-body">
+          <div class="gantt-chart-wrapper" id="gantt-wrapper">
+            <div class="gantt-track" id="gantt-track">
+              <!-- Dynamically populated seconds segments -->
+            </div>
+          </div>
+          <div class="gantt-scale" id="gantt-scale"></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Terminal Logs & Final Metrics Table -->
+    <div class="results-grid">
+      <!-- Dispatcher Console Output -->
+      <section class="card console-section">
+        <div class="card-header">
+          <h2>5. Dispatcher Terminal Logs</h2>
+          <button id="btn-clear-log" class="btn btn-sm">Clear</button>
+        </div>
+        <div class="card-body">
+          <div class="terminal-window" id="terminal-output">
+            <div class="log-line system">[SYSTEM] Batch Process Monitor C-Dispatcher Emulator ready.</div>
+            <div class="log-line info">Select a preset or enter dispatch lines, then click 'Load Jobs'.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Final Evaluation & Metrics Summary Table -->
+      <section class="card summary-section">
+        <div class="card-header">
+          <h2>6. Process Execution Summary & Performance Metrics</h2>
+        </div>
+        <div class="card-body">
+          <div class="table-responsive">
+            <table class="data-table" id="summary-table">
+              <thead>
+                <tr>
+                  <th>Job</th>
+                  <th>PID</th>
+                  <th>Command</th>
+                  <th>Arrival</th>
+                  <th>Burst</th>
+                  <th>Start</th>
+                  <th>Finish</th>
+                  <th>Wait</th>
+                  <th>Turnaround</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="summary-tbody">
+                <tr><td colspan="10" class="text-center text-muted">No completed jobs yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="metrics-cards-row" id="metrics-summary" style="display: none;">
+            <div class="metric-item">
+              <span class="m-title">Average Waiting Time (AWT)</span>
+              <span class="m-val" id="avg-wait">-</span>
+            </div>
+            <div class="metric-item">
+              <span class="m-title">Average Turnaround Time (ATT)</span>
+              <span class="m-val" id="avg-tat">-</span>
+            </div>
+            <div class="metric-item">
+              <span class="m-title">Total Execution Span</span>
+              <span class="m-val" id="total-time">-</span>
+            </div>
+            <div class="metric-item">
+              <span class="m-title">CPU Utilization</span>
+              <span class="m-val" id="cpu-util">-</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Project Architecture & Concept Explanations -->
+    <footer class="project-info-footer card">
+      <div class="card-body info-layout">
+        <div class="team-credits">
+          <h3>Project Details</h3>
+          <p><strong>Project ID:</strong> 25 | <strong>Course:</strong> Operating Systems</p>
+          <p><strong>Core Primitives:</strong> <code>fork()</code>, <code>execvp()</code>, <code>waitpid()</code>, <code>kill() (SIGINT/SIGKILL)</code>, <code>pipe()</code>, <code>sigaction()</code></p>
+          <div class="team-tag-list">
+            <span class="tag leader">★ Lakshay (Lead & Dispatcher Core)</span>
+            <span class="tag">Md Ahab Firoz (Parser & Input Validation)</span>
+            <span class="tag">Akshita Modi (PCB, Queue & Metrics)</span>
+            <span class="tag">N. Shanmuka Abhiram (Testing & Build)</span>
+          </div>
+        </div>
+        <div class="doc-links">
+          <h3>Documentation & Resources</h3>
+          <ul>
+            <li><a href="https://github.com/lakshay8toic/batch-process-monitor/blob/main/README.md" target="_blank">Full Project Documentation (README)</a></li>
+            <li><a href="https://github.com/lakshay8toic/batch-process-monitor/blob/main/docs/VIVA_GUIDE.md" target="_blank">OS Viva & Oral Defense Guide</a></li>
+            <li><a href="https://github.com/lakshay8toic/batch-process-monitor/blob/main/RUN/EXPLAIN_TO_SIR.md" target="_blank">Step-by-Step Lab Demo Guide</a></li>
+          </ul>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
